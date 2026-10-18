@@ -150,12 +150,12 @@ async function main() {
     },
     "@/storage/authToken": tokenStore,
   });
-  assert.equal(HTTP_BASE_URL, "http://72.61.108.231:8080");
+  assert.equal(HTTP_BASE_URL, "https://nero.tap-360.com");
   const oldDomain = process.env.EXPO_PUBLIC_DOMAIN;
   const oldIdentityUrl = process.env.EXPO_PUBLIC_IDENTITY_API_URL;
   try {
     process.env.EXPO_PUBLIC_DOMAIN = "development-bridge.test";
-    process.env.EXPO_PUBLIC_IDENTITY_API_URL = "http://72.61.108.231:8080/";
+    process.env.EXPO_PUBLIC_IDENTITY_API_URL = "https://nero.tap-360.com/";
     for (const os of ["ios", "android", "web"]) {
       const relay = loadSource("utils/httpClient.ts", {
         "@/stores/authStore": storeModule,
@@ -163,7 +163,7 @@ async function main() {
         "@/localization/preferences": { getRequestLanguage: async () => "en" },
         "react-native": { Platform: { OS: os } },
       });
-      assert.equal(relay.HTTP_BASE_URL, "http://72.61.108.231:8080", `${os} must use the supplied identity API`);
+      assert.equal(relay.HTTP_BASE_URL, "https://nero.tap-360.com", `${os} must use the supplied identity API`);
       assert.equal(relay.refreshClient.defaults.baseURL, relay.HTTP_BASE_URL);
     }
     process.env.EXPO_PUBLIC_IDENTITY_API_URL = "https://custom-identity.test";
@@ -171,7 +171,7 @@ async function main() {
       "@/stores/authStore": storeModule, "@/storage/authToken": tokenStore,
       "@/localization/preferences": { getRequestLanguage: async () => "en" },
     });
-    assert.equal(custom.HTTP_BASE_URL, "http://72.61.108.231:8080");
+    assert.equal(custom.HTTP_BASE_URL, "https://nero.tap-360.com");
   } finally {
     if (oldDomain === undefined) delete process.env.EXPO_PUBLIC_DOMAIN; else process.env.EXPO_PUBLIC_DOMAIN = oldDomain;
     if (oldIdentityUrl === undefined) delete process.env.EXPO_PUBLIC_IDENTITY_API_URL; else process.env.EXPO_PUBLIC_IDENTITY_API_URL = oldIdentityUrl;

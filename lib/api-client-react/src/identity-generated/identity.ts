@@ -36,6 +36,7 @@ import type {
   OtpVerificationResult,
   PhoneValidationInput,
   PhoneValidationResult,
+  Questionnaire,
   RefreshConsumerSessionBody
 } from './models';
 
@@ -779,6 +780,75 @@ export function useGetCurrentConsumer<TData = Awaited<ReturnType<typeof getCurre
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetCurrentConsumerQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+
+
+
+
+
+
+/**
+ * @summary Get a published questionnaire (dimensions, questions, answer options) by code
+ */
+export const getConsumerQuestionnaire = (
+    code: string,
+ options?: SecondParameter<typeof identityRequest>,signal?: AbortSignal
+) => {
+
+
+      return identityRequest<Questionnaire>(
+      {url: `/v1/profile/consumer-apis/questionnaires/${code}`, method: 'GET', signal
+    },
+      options);
+    }
+
+
+
+
+export const getGetConsumerQuestionnaireQueryKey = (code: string,) => {
+    return [
+    `/v1/profile/consumer-apis/questionnaires/${code}`
+    ] as const;
+    }
+
+
+export const getGetConsumerQuestionnaireQueryOptions = <TData = Awaited<ReturnType<typeof getConsumerQuestionnaire>>, TError = ErrorType<unknown>>(code: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getConsumerQuestionnaire>>, TError, TData>, request?: SecondParameter<typeof identityRequest>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetConsumerQuestionnaireQueryKey(code);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getConsumerQuestionnaire>>> = ({ signal }) => getConsumerQuestionnaire(code, requestOptions, signal);
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: !!(code), ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getConsumerQuestionnaire>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetConsumerQuestionnaireQueryResult = NonNullable<Awaited<ReturnType<typeof getConsumerQuestionnaire>>>
+export type GetConsumerQuestionnaireQueryError = ErrorType<unknown>
+
+
+/**
+ * @summary Get a published questionnaire (dimensions, questions, answer options) by code
+ */
+
+export function useGetConsumerQuestionnaire<TData = Awaited<ReturnType<typeof getConsumerQuestionnaire>>, TError = ErrorType<unknown>>(
+ code: string, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getConsumerQuestionnaire>>, TError, TData>, request?: SecondParameter<typeof identityRequest>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetConsumerQuestionnaireQueryOptions(code,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

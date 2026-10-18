@@ -206,6 +206,26 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ConsumerProfile"
+  /v1/profile/consumer-apis/questionnaires/{code}:
+    get:
+      operationId: getConsumerQuestionnaire
+      summary: Get a published questionnaire (dimensions, questions, answer options) by code
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+          example: MONEY_ATTITUDE
+      responses:
+        "200":
+          description: Questionnaire definition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Questionnaire"
 components:
   securitySchemes:
     bearerAuth:
@@ -406,3 +426,108 @@ components:
           type: object
           nullable: true
           additionalProperties: true
+    LocalizedText:
+      type: object
+      required: [en]
+      properties:
+        en:
+          type: string
+        ar:
+          type: string
+    QuestionnaireAnswerOption:
+      type: object
+      required: [value, label]
+      properties:
+        value:
+          type: number
+        label:
+          $ref: "#/components/schemas/LocalizedText"
+    QuestionnaireAnswerSchema:
+      type: object
+      required: [type, options]
+      properties:
+        type:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        options:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuestionnaireAnswerOption"
+    QuestionnaireQuestion:
+      type: object
+      required: [id, key, displayOrder, question, questionType, answerSchema]
+      properties:
+        id:
+          type: string
+        key:
+          type: string
+        dimensionKey:
+          type: string
+          nullable: true
+        displayOrder:
+          type: number
+        question:
+          $ref: "#/components/schemas/LocalizedText"
+        questionType:
+          type: string
+        answerSchema:
+          $ref: "#/components/schemas/QuestionnaireAnswerSchema"
+        reverseScored:
+          type: boolean
+        scoreWeight:
+          type: number
+        active:
+          type: boolean
+    QuestionnaireDimension:
+      type: object
+      required: [id, key, label, displayOrder, questions]
+      properties:
+        id:
+          type: string
+        key:
+          type: string
+        label:
+          $ref: "#/components/schemas/LocalizedText"
+        profileName:
+          $ref: "#/components/schemas/LocalizedText"
+        populationAverage:
+          type: number
+        narrativeHigh:
+          $ref: "#/components/schemas/LocalizedText"
+        narrativeModerate:
+          $ref: "#/components/schemas/LocalizedText"
+        narrativeLow:
+          $ref: "#/components/schemas/LocalizedText"
+        displayOrder:
+          type: number
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuestionnaireQuestion"
+    Questionnaire:
+      type: object
+      required: [id, code, name, version, dimensions]
+      properties:
+        id:
+          type: string
+        code:
+          type: string
+        name:
+          $ref: "#/components/schemas/LocalizedText"
+        version:
+          type: number
+        scoreHighThreshold:
+          type: number
+        scoreModerateThreshold:
+          type: number
+        dimensions:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuestionnaireDimension"
+        undimensionedQuestions:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuestionnaireQuestion"

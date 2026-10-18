@@ -32,7 +32,7 @@ router.use(async (req, res) => {
     if (path === "/v1/identity/consumer/me" && req.get("Authorization")) {
       headers.Authorization = req.get("Authorization")!;
     }
-    const upstream = await fetch(`http://72.61.108.231:8080${path}`, {
+    const upstream = await fetch(`https://nero.tap-360.com${path}`, {
       method: req.method, headers, redirect: "error",
       body: req.method === "GET" ? undefined : JSON.stringify(req.body),
       signal: AbortSignal.timeout(25_000),

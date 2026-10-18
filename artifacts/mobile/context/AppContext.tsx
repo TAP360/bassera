@@ -2,6 +2,7 @@ import { encryptedStorage as AsyncStorage } from '@/storage/encryptedStorage';
 import { useAuthStore } from '@/stores/authStore';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { useLocalization } from '@/localization';
+import type { QuestionnaireResult } from '@/utils/questionnaireScoring';
 import React, {
   createContext,
   useCallback,
@@ -25,6 +26,8 @@ interface UserProfile {
   email: string;
   photoUri?: string;
   personalityType: PersonalityType;
+  /** Latest Money Attitude questionnaire result from onboarding. */
+  moneyAttitude?: QuestionnaireResult | null;
   subscription: 'free' | 'premium' | 'premium_plus';
   joinDate: string;
   wellnessScore: number;
@@ -93,6 +96,7 @@ interface AppContextValue extends AppState {
     personality: PersonalityType,
     name?: string,
     email?: string,
+    moneyAttitude?: QuestionnaireResult,
   ) => Promise<void>;
   checkAccountExists: (email: string) => Promise<boolean>;
   signIn: (email: string) => Promise<void>;
@@ -289,7 +293,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [loaded, state]);
 
   const completeOnboarding = useCallback(
-    async (personality: PersonalityType, name?: string, email?: string) => {
+    async (
+      personality: PersonalityType,
+      name?: string,
+      email?: string,
+      moneyAttitude?: QuestionnaireResult,
+    ) => {
       if (email) await registerAccount(email);
       setState((prev) => {
         const next: AppState = {
@@ -298,6 +307,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           profile: {
             ...prev.profile,
             personalityType: personality,
+            moneyAttitude: moneyAttitude ?? prev.profile.moneyAttitude,
             name: name ?? prev.profile.name,
             email: email?.trim() || prev.profile.email,
           },

@@ -1,9 +1,8 @@
 # Consumer identity login
 
 The mobile app uses the existing Axios client in `utils/httpClient.ts` for
-the external consumer identity service. Its owner-supplied test base URL is
-`http://72.61.108.231:8080/`, explicitly approved for development despite
-unencrypted transport. The API base URL is fixed to this service. The business
+the external consumer identity service. Its owner-supplied base URL is
+`https://nero.tap-360.com/`. The API base URL is fixed to this service. The business
 code defaults to `neurowealth` and can be overridden with
 `EXPO_PUBLIC_IDENTITY_BUSINESS_CODE`; these values are public configuration,
 not credentials. Phone validation sends `{ countryCode, phone }`; the phone

@@ -7,12 +7,9 @@ import { reportApiRequest } from '@/utils/reactotron';
 import type { AxiosRequestConfig } from 'axios';
 import type { ConsumerTokens } from '@workspace/api-client-react';
 
-// Plain HTTP explicitly approved for development only.
-export const IDENTITY_BASE_URL = 'http://72.61.108.231:8080/';
-// Expo Go uses the same HTTPS relay as web: device policies/networks may
-// reject direct plain-HTTP IP/port requests. Upstream remains development HTTP.
-// The relay is fixed to this backend, so never redirect a custom backend to it.
-export const HTTP_BASE_URL = 'http://72.61.108.231:8080';
+export const IDENTITY_BASE_URL = 'https://nero.tap-360.com/';
+// The API base URL is fixed to this backend, so never redirect a custom backend to it.
+export const HTTP_BASE_URL = 'https://nero.tap-360.com';
 
 export const httpClient = axios.create({
   baseURL: HTTP_BASE_URL,

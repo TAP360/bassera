@@ -22,6 +22,7 @@ import { useLocalization } from "@/localization";
 import { showProfilePhotoOptions } from "@/utils/profilePhoto";
 import { useConsumerSession, useSessionLogout } from "@/hooks/useConsumerSession";
 import { authErrorMessage } from "@/utils/authErrors";
+import { localize } from "@/utils/questionnaireScoring";
 
 const personalityColors: Record<string, string> = {
   "Money Vigilance": "#2E3192",
@@ -77,6 +78,14 @@ export default function ProfileScreen() {
   // The fixed tab bar overlays the scroll view on web and native platforms.
   // Keep the final actions above it at the bottom of the scroll range.
   const bottomPad = insets.bottom + (Platform.OS === "web" ? 104 : 96);
+  const attitude = profile.moneyAttitude?.dimensions.find(
+    (d) => d.key === profile.moneyAttitude?.dominantKey,
+  );
+  const personalityLabel = attitude
+    ? localize(attitude.profileName ?? attitude.label, language)
+    : profile.personalityType
+      ? t(profile.personalityType)
+      : "";
   const pColor =
     personalityColors[profile.personalityType ?? "Money Vigilance"] ??
     "#2E3192";
@@ -343,7 +352,7 @@ export default function ProfileScreen() {
       </LinearGradient>
 
       <View style={styles.body}>
-        {profile.personalityType && (
+        {!!personalityLabel && (
           <View
             style={[styles.personalityCard, { backgroundColor: colors.card }]}
           >
@@ -365,7 +374,7 @@ export default function ProfileScreen() {
                 {t("profile.moneyPersonality")}
               </Text>
               <Text style={[styles.personalityName, { color: pColor, textAlign }]}>
-                {t(profile.personalityType)}
+                {personalityLabel}
               </Text>
             </View>
             <Pressable

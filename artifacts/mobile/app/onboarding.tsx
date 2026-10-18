@@ -2,8 +2,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
   Alert,
   Dimensions,
@@ -11,6 +12,7 @@ import {
   Image,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -19,14 +21,23 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
-import { useApp, PersonalityType } from '@/context/AppContext';
+import { useApp } from '@/context/AppContext';
 import { useLocalization } from '@/localization';
 import { IdentityAuthForm } from '@/components/IdentityAuthForm';
 import { useMobileLogin } from '@/hooks/useMobileLogin';
 import { useConsumerSession } from '@/hooks/useConsumerSession';
 import { markSurveyComplete } from '@/stores/authStore';
 import { useConsumerProfileUpdate } from '@/hooks/useConsumerProfileUpdate';
+import { useMoneyAttitudeQuestionnaire } from '@/hooks/useMoneyAttitudeQuestionnaire';
 import { authErrorMessage } from '@/utils/authErrors';
+import {
+  localize,
+  orderedQuestions,
+  questionOptions,
+  scoreQuestionnaire,
+  type QuestionnaireResult,
+  type ScoreBand,
+} from '@/utils/questionnaireScoring';
 
 const { width, height } = Dimensions.get('window');
 
@@ -81,120 +92,12 @@ const SLIDES = [
   },
 ];
 
-const QUESTIONS = [
-  {
-    id: 1,
-    text: "When you receive unexpected money, what's your first instinct?",
-    options: [
-      { text: "Spend it on something I've wanted", scores: { worship: 2 } },
-      { text: 'Save it immediately', scores: { vigilance: 2 } },
-      { text: 'Buy something to impress others', scores: { status: 2 } },
-      { text: 'Feel guilty and donate it', scores: { avoidance: 2 } },
-    ],
-  },
-  {
-    id: 2,
-    text: 'How do you feel when discussing money with family?',
-    options: [
-      {
-        text: 'Anxious — I prefer not to talk about it',
-        scores: { avoidance: 2, vigilance: 1 },
-      },
-      {
-        text: 'Obligated to help everyone financially',
-        scores: { obligation: 2 },
-      },
-      { text: 'Open and comfortable', scores: { vigilance: 1 } },
-      { text: 'It shows who has power', scores: { status: 2 } },
-    ],
-  },
-  {
-    id: 3,
-    text: 'What does financial success mean to you?',
-    options: [
-      { text: 'Having enough to never worry again', scores: { worship: 2 } },
-      {
-        text: 'Living below my means, always saving',
-        scores: { vigilance: 2 },
-      },
-      { text: 'Driving a luxury car and nice home', scores: { status: 2 } },
-      { text: 'Being free from financial ties', scores: { avoidance: 2 } },
-    ],
-  },
-  {
-    id: 4,
-    text: 'When you see something expensive you want, you:',
-    options: [
-      { text: 'Buy it — I deserve it', scores: { worship: 2 } },
-      {
-        text: 'Research, wait, then decide carefully',
-        scores: { vigilance: 2 },
-      },
-      { text: 'Buy it so others see my taste', scores: { status: 2 } },
-      {
-        text: 'Talk myself out of it, feel relief',
-        scores: { avoidance: 1, obligation: 1 },
-      },
-    ],
-  },
-];
+const DIMENSION_COLORS = ['#2E3192', '#F37021', '#92278F', '#22C55E', '#F59E0B'];
 
-type ScoreKey = 'worship' | 'vigilance' | 'status' | 'avoidance' | 'obligation';
-
-function getPersonality(scores: Record<ScoreKey, number>): PersonalityType {
-  const max = Math.max(...Object.values(scores));
-  const winner = Object.entries(scores).find(
-    ([, v]) => v === max,
-  )?.[0] as ScoreKey;
-  const map: Record<ScoreKey, PersonalityType> = {
-    worship: 'Money Worship',
-    vigilance: 'Money Vigilance',
-    status: 'Money Status',
-    avoidance: 'Money Avoidance',
-    obligation: 'Money Obligation',
-  };
-  return map[winner] ?? 'Money Vigilance';
-}
-
-const personalityInfo: Record<
-  string,
-  { emoji: string; color: string; desc: string; strength: string; risk: string }
-> = {
-  'Money Vigilance': {
-    emoji: '🛡️',
-    color: '#2E3192',
-    desc: 'You are careful, responsible, and private about money. You believe in saving and being prepared.',
-    strength: 'Excellent at saving and financial security',
-    risk: 'May avoid spending even on important needs',
-  },
-  'Money Worship': {
-    emoji: '✨',
-    color: '#F37021',
-    desc: 'You believe money can solve problems and create happiness. You work hard to earn more.',
-    strength: 'High financial motivation and ambition',
-    risk: 'Prone to overspending or compulsive buying',
-  },
-  'Money Status': {
-    emoji: '👑',
-    color: '#92278F',
-    desc: 'Money equals success and social status. Your self-worth is tied to financial achievement.',
-    strength: 'Driven to achieve financial milestones',
-    risk: 'Spending to impress rather than fulfill',
-  },
-  'Money Avoidance': {
-    emoji: '🌿',
-    color: '#22C55E',
-    desc: 'You believe money is corrupting or stressful. You prefer to ignore financial matters.',
-    strength: 'Less materialistic, values experiences',
-    risk: 'May neglect important financial planning',
-  },
-  'Money Obligation': {
-    emoji: '🤝',
-    color: '#F59E0B',
-    desc: 'You feel a deep sense of responsibility to provide for and support others financially.',
-    strength: 'Generous and family-oriented with money',
-    risk: 'May sacrifice your own financial wellbeing',
-  },
+const BAND_COLORS: Record<ScoreBand, string> = {
+  high: '#22C55E',
+  moderate: '#F59E0B',
+  low: '#4A90E2',
 };
 
 export default function OnboardingScreen() {
@@ -212,14 +115,16 @@ export default function OnboardingScreen() {
   const [slideIndex, setSlideIndex] = useState(0);
   const [userName, setUserName] = useState(consumer?.name ?? '');
   const [questionIndex, setQuestionIndex] = useState(0);
-  const [scores, setScores] = useState<Record<ScoreKey, number>>({
-    worship: 0,
-    vigilance: 0,
-    status: 0,
-    avoidance: 0,
-    obligation: 0,
-  });
-  const [personality, setPersonality] = useState<PersonalityType>(null);
+  const [answers, setAnswers] = useState<Record<string, number>>({});
+  const [result, setResult] = useState<QuestionnaireResult | null>(null);
+  const [finishing, setFinishing] = useState(false);
+  const questionnaire = useMoneyAttitudeQuestionnaire(
+    phase === 'name' || phase === 'assessment',
+  );
+  const questions = useMemo(
+    () => (questionnaire.data ? orderedQuestions(questionnaire.data) : []),
+    [questionnaire.data],
+  );
   const [visibleWords, setVisibleWords] = useState(0);
   const flatRef = useRef<FlatList>(null);
   const fadeAnim = useRef(new Animated.Value(1)).current;
@@ -409,33 +314,45 @@ export default function OnboardingScreen() {
     fadeTransition(() => setPhase('assessment'));
   };
 
-  const handleAnswer = (optionScores: Partial<Record<ScoreKey, number>>) => {
+  const handleAnswer = (value: number) => {
+    const data = questionnaire.data;
+    const question = questions[questionIndex];
+    if (!data || !question) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const newScores = { ...scores };
-    for (const [k, v] of Object.entries(optionScores) as [ScoreKey, number][]) {
-      newScores[k] = (newScores[k] ?? 0) + v;
-    }
-    setScores(newScores);
+    const nextAnswers = { ...answers, [question.id]: value };
+    setAnswers(nextAnswers);
 
-    if (questionIndex < QUESTIONS.length - 1) {
+    if (questionIndex < questions.length - 1) {
       fadeTransition(() => setQuestionIndex((i) => i + 1));
     } else {
-      const p = getPersonality(newScores);
-      setPersonality(p);
+      setResult(scoreQuestionnaire(data, nextAnswers));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       fadeTransition(() => setPhase('result'));
     }
   };
 
+  const handleBack = () => {
+    if (questionIndex === 0) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    fadeTransition(() => setQuestionIndex((i) => i - 1));
+  };
+
   const handleFinish = async () => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    await completeOnboarding(
-      personality,
-      userName.trim() || undefined,
-      consumer?.email || (auth.isEmail ? auth.identifier.trim() : undefined),
-    );
-    await markSurveyComplete();
-    router.replace('/');
+    if (!result || finishing) return;
+    setFinishing(true);
+    try {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await completeOnboarding(
+        null,
+        userName.trim() || undefined,
+        consumer?.email || (auth.isEmail ? auth.identifier.trim() : undefined),
+        result,
+      );
+      await markSurveyComplete();
+      router.replace('/');
+    } finally {
+      setFinishing(false);
+    }
   };
 
   const topPad = Platform.OS === 'web' ? insets.top + 67 : insets.top;
@@ -706,8 +623,11 @@ export default function OnboardingScreen() {
     );
   }
 
+  const textAlign = language === 'ar' ? 'right' : 'left';
+
   if (phase === 'assessment') {
-    const q = QUESTIONS[questionIndex];
+    const q = questions[questionIndex];
+    const selected = q ? answers[q.id] : undefined;
     return (
       <LinearGradient
         colors={['#0B1026', '#1A1040', '#2E1855']}
@@ -717,93 +637,178 @@ export default function OnboardingScreen() {
         ]}
       >
         <Animated.View style={[styles.assessContainer, { opacity: fadeAnim }]}>
-          <View style={styles.progressRow}>
-            {QUESTIONS.map((_, i) => (
-              <View
-                key={i}
-                style={[
-                  styles.progressDot,
-                  i <= questionIndex && styles.progressDotActive,
-                ]}
-              />
-            ))}
-          </View>
-          <Text style={styles.assessStep}>
-            {t('onboarding.question', { current: questionIndex + 1, total: QUESTIONS.length })}
-          </Text>
-          <Text style={styles.assessTitle}>{t(q.text)}</Text>
-          <View style={styles.optionList}>
-            {q.options.map((opt, i) => (
-              <Pressable
-                key={i}
-                style={({ pressed }) => [
-                  styles.option,
-                  pressed && styles.optionPressed,
-                ]}
-                onPress={() => handleAnswer(opt.scores)}
-              >
-                <Text style={styles.optionText}>{t(opt.text)}</Text>
-              </Pressable>
-            ))}
-          </View>
+          {!q ? (
+            <View style={styles.center}>
+              {questionnaire.isError || questionnaire.isSuccess ? (
+                <>
+                  <Text style={styles.assessSubtitle}>
+                    {questionnaire.isError
+                      ? authErrorMessage(questionnaire.error, language)
+                      : t('onboarding.surveyUnavailable')}
+                  </Text>
+                  <Pressable
+                    style={styles.assessBtn}
+                    testID="onboarding-survey-retry"
+                    disabled={questionnaire.isFetching}
+                    onPress={() => void questionnaire.refetch()}
+                  >
+                    <LinearGradient
+                      colors={['#2E3192', '#92278F', '#F37021']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={styles.assessBtnGrad}
+                    >
+                      <Text style={styles.assessBtnText}>
+                        {questionnaire.isFetching ? t('common.loading') : t('common.retry')}
+                      </Text>
+                    </LinearGradient>
+                  </Pressable>
+                </>
+              ) : (
+                <>
+                  <ActivityIndicator color="#FFFFFF" size="large" />
+                  <Text style={[styles.assessSubtitle, { marginTop: 16 }]}>
+                    {t('common.loading')}
+                  </Text>
+                </>
+              )}
+            </View>
+          ) : (
+            <>
+              <View style={styles.progressRow}>
+                {questions.map((question, i) => (
+                  <View
+                    key={question.id}
+                    style={[
+                      styles.progressDot,
+                      i <= questionIndex && styles.progressDotActive,
+                    ]}
+                  />
+                ))}
+              </View>
+              <Text style={styles.assessStep}>
+                {t('onboarding.question', { current: questionIndex + 1, total: questions.length })}
+              </Text>
+              <Text style={styles.assessTitle}>{localize(q.question, language)}</Text>
+              <View style={styles.optionList}>
+                {questionOptions(q).map((opt) => (
+                  <Pressable
+                    key={opt.value}
+                    testID={`onboarding-answer-${opt.value}`}
+                    style={({ pressed }) => [
+                      styles.option,
+                      (pressed || selected === opt.value) && styles.optionPressed,
+                    ]}
+                    onPress={() => handleAnswer(opt.value)}
+                  >
+                    <Text style={[styles.optionText, { textAlign }]}>
+                      {localize(opt.label, language)}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              {questionIndex > 0 && (
+                <Pressable style={[styles.skipBtn, { marginTop: 16 }]} onPress={handleBack}>
+                  <Text style={styles.skipText}>{t('common.back')}</Text>
+                </Pressable>
+              )}
+            </>
+          )}
         </Animated.View>
       </LinearGradient>
     );
   }
 
-  const info = personalityInfo[personality ?? 'Money Vigilance'];
+  const dominantIndex = Math.max(
+    result?.dimensions.findIndex((d) => d.key === result.dominantKey) ?? -1,
+    0,
+  );
+  const dominant = result?.dimensions[dominantIndex];
+  const dominantColor = DIMENSION_COLORS[dominantIndex % DIMENSION_COLORS.length];
   return (
     <LinearGradient
       colors={['#0B1026', '#1A1040', '#2E1855']}
-      style={[styles.fill, { paddingTop: topPad, paddingBottom: botPad + 16 }]}
+      style={[styles.fill, { paddingTop: topPad }]}
     >
-      <Animated.View style={[styles.center, { opacity: fadeAnim }]}>
-        <View
-          style={[
-            styles.personalityBadge,
-            {
-              backgroundColor: info.color + '22',
-              borderColor: info.color + '55',
-            },
-          ]}
+      <Animated.View style={[styles.fill, { opacity: fadeAnim }]}>
+        <ScrollView
+          contentContainerStyle={[styles.resultScroll, { paddingBottom: botPad + 16 }]}
+          showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.personalityEmoji}>{info.emoji}</Text>
-          <Text style={[styles.personalityName, { color: info.color }]}>
-            {t(personality ?? '')}
-          </Text>
-        </View>
+          <Text style={styles.slideTitle}>{t('onboarding.result')}</Text>
+          {dominant && (
+            <View
+              style={[
+                styles.personalityBadge,
+                {
+                  backgroundColor: dominantColor + '22',
+                  borderColor: dominantColor + '55',
+                },
+              ]}
+            >
+              <Text style={[styles.personalityName, { color: dominantColor }]}>
+                {localize(dominant.profileName ?? dominant.label, language)}
+              </Text>
+            </View>
+          )}
 
-        <Text style={styles.slideTitle}>{t('onboarding.result')}</Text>
-        <Text style={styles.resultDesc}>{t(info.desc)}</Text>
-
-        <View style={styles.resultCards}>
-          <View style={styles.resultCard}>
-            <Text style={styles.resultCardLabel}>{t('Strength')}</Text>
-            <Text style={styles.resultCardText}>{t(info.strength)}</Text>
+          <View style={styles.resultCards}>
+            {result?.dimensions.map((d, i) => {
+              const color = DIMENSION_COLORS[i % DIMENSION_COLORS.length];
+              return (
+                <View key={d.key} style={styles.dimensionCard}>
+                  <View style={styles.dimensionHeader}>
+                    <Text style={[styles.dimensionLabel, { color }]}>
+                      {localize(d.label, language)}
+                    </Text>
+                    <Text style={styles.dimensionScore}>{d.score}%</Text>
+                  </View>
+                  <View style={styles.scoreTrack}>
+                    <View
+                      style={[styles.scoreFill, { width: `${d.score}%`, backgroundColor: color }]}
+                    />
+                    {d.populationAverage !== undefined && (
+                      <View style={[styles.scoreAverage, { left: `${d.populationAverage}%` }]} />
+                    )}
+                  </View>
+                  <View style={styles.dimensionHeader}>
+                    <Text style={[styles.bandText, { color: BAND_COLORS[d.band] }]}>
+                      {t(`onboarding.band.${d.band}`)}
+                    </Text>
+                    {d.populationAverage !== undefined && (
+                      <Text style={styles.averageText}>
+                        {t('onboarding.average', { value: d.populationAverage })}
+                      </Text>
+                    )}
+                  </View>
+                  {!!d.narrative && (
+                    <Text style={[styles.resultCardText, { textAlign }]}>
+                      {localize(d.narrative, language)}
+                    </Text>
+                  )}
+                </View>
+              );
+            })}
           </View>
-          <View
-            style={[
-              styles.resultCard,
-              { borderColor: '#EF444422', backgroundColor: '#EF444411' },
-            ]}
-          >
-            <Text style={[styles.resultCardLabel, { color: '#EF4444' }]}>
-              {t('Watch Out')}
-            </Text>
-            <Text style={styles.resultCardText}>{t(info.risk)}</Text>
-          </View>
-        </View>
 
-        <Pressable style={styles.nextBtn} onPress={handleFinish}>
-          <LinearGradient
-            colors={['#2E3192', '#92278F', '#F37021']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.nextBtnGrad}
+          <Pressable
+            style={[styles.nextBtn, styles.fullWidth, finishing && styles.assessBtnDisabled]}
+            onPress={handleFinish}
+            disabled={finishing}
+            testID="onboarding-finish"
           >
-            <Text style={styles.nextBtnText}>{t('Start My Journey')}</Text>
-          </LinearGradient>
-        </Pressable>
+            <LinearGradient
+              colors={['#2E3192', '#92278F', '#F37021']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.nextBtnGrad}
+            >
+              <Text style={styles.nextBtnText}>
+                {finishing ? t('common.loading') : t('Start My Journey')}
+              </Text>
+            </LinearGradient>
+          </Pressable>
+        </ScrollView>
       </Animated.View>
     </LinearGradient>
   );
@@ -1034,33 +1039,50 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     gap: 8,
   },
-  personalityEmoji: { fontSize: 40 },
-  personalityName: { fontSize: 18, fontFamily: 'Inter_700Bold' },
-  resultDesc: {
-    fontSize: 15,
-    fontFamily: 'Inter_400Regular',
-    color: 'rgba(255,255,255,0.7)',
-    textAlign: 'center',
-    lineHeight: 22,
-    marginBottom: 24,
-    paddingHorizontal: 4,
-  },
-  resultCards: { width: '100%', gap: 12, marginBottom: 32 },
-  resultCard: {
-    backgroundColor: 'rgba(34,197,94,0.1)',
+  resultScroll: { alignItems: 'center', paddingHorizontal: 28, paddingTop: 24 },
+  fullWidth: { width: '100%' },
+  dimensionCard: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
     borderWidth: 1,
-    borderColor: 'rgba(34,197,94,0.25)',
+    borderColor: 'rgba(255,255,255,0.12)',
     borderRadius: 16,
     padding: 16,
+    gap: 8,
   },
-  resultCardLabel: {
+  dimensionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  dimensionLabel: { fontSize: 15, fontFamily: 'Inter_700Bold' },
+  dimensionScore: { fontSize: 15, fontFamily: 'Inter_600SemiBold', color: '#FFFFFF' },
+  scoreTrack: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    overflow: 'hidden',
+  },
+  scoreFill: { height: 8, borderRadius: 4 },
+  scoreAverage: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: 2,
+    backgroundColor: 'rgba(255,255,255,0.8)',
+  },
+  bandText: {
     fontSize: 12,
     fontFamily: 'Inter_600SemiBold',
-    color: '#22C55E',
-    marginBottom: 4,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
+  averageText: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: 'rgba(255,255,255,0.5)',
+  },
+  personalityName: { fontSize: 18, fontFamily: 'Inter_700Bold' },
+  resultCards: { width: '100%', gap: 12, marginBottom: 32 },
   resultCardText: {
     fontSize: 14,
     fontFamily: 'Inter_400Regular',
