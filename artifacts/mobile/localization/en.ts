@@ -41,6 +41,7 @@ export const en = {
   'home.recentTransactions': 'Recent Transactions',
   'home.seeAll': 'See All',
   'home.noTransactions': 'No transactions yet',
+  'home.transactionsLoadError': "Couldn't load recent transactions.",
   'home.saved': 'Saved',
   'home.ofTotal': 'saved of {amount} total',
   'home.positiveChange': 'Great progress toward your Emergency Fund. 62% complete!',

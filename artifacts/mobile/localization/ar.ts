@@ -50,6 +50,7 @@ export const ar: Record<TranslationKey, string> = {
   'home.recentTransactions': 'المعاملات الأخيرة',
   'home.seeAll': 'عرض الكل',
   'home.noTransactions': 'لا توجد معاملات بعد',
+  'home.transactionsLoadError': 'تعذر تحميل أحدث المعاملات.',
   'home.saved': 'المدخر',
   'home.ofTotal': 'مدخر من إجمالي {amount}',
   'home.positiveChange': 'تقدم رائع نحو صندوق الطوارئ. اكتمل بنسبة 62٪!',

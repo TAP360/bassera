@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Animated,
+  ActivityIndicator,
   Image,
   Platform,
   Pressable,
@@ -22,6 +23,7 @@ import { useApp, MoodType } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 import { useLocalization } from '@/localization';
 import { useConsumerSession } from '@/hooks/useConsumerSession';
+import { useRecentTransactions } from '@/hooks/useRecentTransactions';
 import { useAuthStore } from '@/stores/authStore';
 
 const MOODS: { type: MoodType; icon: string; label: string }[] = [
@@ -60,8 +62,9 @@ export default function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { profile, mood, setMood, transactions, hasOnboarded } = useApp();
+  const { profile, mood, setMood, hasOnboarded } = useApp();
   const { isAuthenticated } = useConsumerSession();
+  const recentTransactionsQuery = useRecentTransactions(isAuthenticated);
   const surveyPending = useAuthStore((state) => state.surveyPending);
   const { t, isRTL } = useLocalization();
   const textAlign = isRTL ? 'right' : 'left';
@@ -86,6 +89,29 @@ export default function HomeScreen() {
   const hour = new Date().getHours();
   const greeting =
     hour < 12 ? t('home.goodMorning') : hour < 17 ? t('home.goodAfternoon') : t('home.goodEvening');
+  const recentTransactions = (recentTransactionsQuery.data ?? [])
+    .slice(0, 4)
+    .map((transaction) => {
+      const transactionDate = new Date(transaction.transactionDate);
+      return {
+        id: transaction.id,
+        title:
+          transaction.merchantName ||
+          transaction.description ||
+          transaction.category ||
+          t('Transaction'),
+        category: transaction.category || t('Other'),
+        amount: transaction.amount,
+        currency: transaction.currency,
+        date: Number.isNaN(transactionDate.getTime())
+          ? transaction.transactionDate
+          : transactionDate.toLocaleDateString(isRTL ? 'ar-EG' : 'en-EG', {
+              day: 'numeric',
+              month: 'short',
+            }),
+        type: transaction.amount >= 0 ? ('income' as const) : ('expense' as const),
+      };
+    });
 
   const quickActions = [
     {
@@ -376,7 +402,26 @@ export default function HomeScreen() {
           <Text style={[styles.sectionTitle, { color: colors.foreground, textAlign }]}>
             {t('home.recentTransactions')}
           </Text>
-          {transactions.slice(0, 4).map((tx) => (
+          {isAuthenticated && recentTransactionsQuery.isPending ? (
+            <ActivityIndicator color={colors.foreground} />
+          ) : recentTransactionsQuery.isError ? (
+            <View style={[styles.txRow, { backgroundColor: colors.card }]}>
+              <View style={styles.txInfo}>
+                <Text style={[styles.txCategory, { color: colors.mutedForeground, textAlign }]}>
+                  {t('home.transactionsLoadError')}
+                </Text>
+                <Pressable onPress={() => void recentTransactionsQuery.refetch()}>
+                  <Text style={[styles.txTitle, { color: colors.foreground, textAlign }]}>
+                    {t('common.retry')}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : recentTransactions.length === 0 ? (
+            <Text style={[styles.txCategory, { color: colors.mutedForeground, textAlign }]}>
+              {t('home.noTransactions')}
+            </Text>
+          ) : recentTransactions.map((tx) => (
             <View
               key={tx.id}
               style={[styles.txRow, { backgroundColor: colors.card }]}
@@ -400,13 +445,12 @@ export default function HomeScreen() {
               </View>
               <View style={styles.txInfo}>
                 <Text style={[styles.txTitle, { color: colors.foreground, textAlign }]}>
-                  {t(({ '1': 'data.morningCoffee', '2': 'data.salaryDeposit', '3': 'data.onlineShopping', '4': 'data.gymMembership', '5': 'data.freelancePayment' } as Record<string, string>)[tx.id] ?? tx.title)}
+                  {tx.title}
                 </Text>
                 <Text
                   style={[styles.txCategory, { color: colors.mutedForeground, textAlign }]}
                 >
-                  {t(({ 'Food & Drink': 'data.foodDrink', Income: 'data.income', Shopping: 'data.shopping', Health: 'data.health' } as Record<string, string>)[tx.category] ?? tx.category)}
-                  {tx.emotionTag ? ` · ${tx.emotionTag}` : ''}
+                  {tx.category}
                 </Text>
               </View>
               <View style={styles.txRight}>
@@ -417,12 +461,12 @@ export default function HomeScreen() {
                   ]}
                 >
                   {tx.type === 'income' ? '+' : ''}
-                  {tx.amount.toLocaleString()} EGP
+                  {tx.amount.toLocaleString()} {tx.currency}
                 </Text>
                 <Text
                   style={[styles.txDate, { color: colors.mutedForeground, textAlign }]}
                 >
-                  {t(({ Today: 'data.today', Yesterday: 'data.yesterday', '2 days ago': 'data.twoDaysAgo', '3 days ago': 'data.threeDaysAgo', '4 days ago': 'data.fourDaysAgo', 'Just now': 'data.justNow' } as Record<string, string>)[tx.date] ?? tx.date)}
+                  {tx.date}
                 </Text>
               </View>
             </View>
