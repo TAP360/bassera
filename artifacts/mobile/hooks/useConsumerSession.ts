@@ -6,6 +6,7 @@ import {
   type ConsumerTokens,
 } from "@workspace/api-client-react";
 import { saveConsumerProfile, useAuthStore } from "@/stores/authStore";
+import { revokeSession } from "@/utils/httpClient";
 import "@/utils/identityTransport";
 
 export const IDENTITY_QUERY_ROOT = ["identity", "consumer"] as const;
@@ -41,8 +42,14 @@ export function useConsumerSession() {
 }
 
 export async function logoutSession(queryClient: QueryClient): Promise<void> {
-  await queryClient.cancelQueries({ queryKey: IDENTITY_QUERY_ROOT });
-  queryClient.removeQueries({ queryKey: IDENTITY_QUERY_ROOT });
+  try {
+    await revokeSession();
+  } catch {
+    // Server revocation is best effort (e.g. offline); the device must still sign out.
+  }
+  await queryClient.cancelQueries();
+  // Drops every cached query (goals, transactions, …) so nothing leaks to the next account.
+  queryClient.clear();
   await useAuthStore.getState().clearSession();
 }
 

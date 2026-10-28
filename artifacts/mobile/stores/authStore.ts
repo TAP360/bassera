@@ -1,13 +1,16 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { configureStore, createSlice, type PayloadAction } from "@reduxjs/toolkit";
-import { useSelector } from "react-redux";
-import { persistReducer, persistStore, FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER, type PersistorOptions } from "redux-persist";
+import { create } from "zustand";
+import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
 import type { ConsumerTokens, ConsumerProfile, OtpVerificationResult } from "@workspace/api-client-react";
 import { encryptedStorage } from "@/storage/encryptedStorage";
 
+// Key inherited from the former redux-persist store so existing sessions survive the migration.
 export const AUTH_STORAGE_KEY = "persist:bassera_identity";
 const LEGACY_KEY = "@bassera_auth_session";
-interface IdentityState {
+const STORE_VERSION = 3;
+const PERSISTED_KEYS = ["tokens", "profile", "phone", "expiresAt", "profileFetchedAt", "surveyPending"] as const;
+
+interface IdentityData {
   tokens: ConsumerTokens | null;
   profile: ConsumerProfile | null;
   phone: string | null;
@@ -17,60 +20,103 @@ interface IdentityState {
   /** First-time user who has not finished the onboarding survey yet. */
   surveyPending: boolean;
 }
-const initialState: IdentityState = {
+type PersistedIdentity = Pick<IdentityData, (typeof PERSISTED_KEYS)[number]>;
+interface IdentityState extends IdentityData {
+  saveSession: (tokens: ConsumerTokens, phone?: string, newUser?: boolean) => Promise<void>;
+  clearSession: () => Promise<void>;
+}
+
+const initialData: IdentityData = {
   tokens: null, profile: null, phone: null, expiresAt: 0, profileFetchedAt: 0, sessionReady: false,
   surveyPending: false,
 };
-let persistenceError: unknown;
 let hydrationError: unknown;
-const slice = createSlice({
-  name: "identity",
-  initialState,
-  reducers: {
-    session(state, action: PayloadAction<{ tokens: ConsumerTokens; phone?: string | null; newUser?: boolean }>) {
-      state.tokens = action.payload.tokens; state.profile = null; state.profileFetchedAt = 0;
-      state.phone = action.payload.phone ?? null;
-      state.surveyPending = action.payload.newUser === true;
-      state.expiresAt = Date.now() + action.payload.tokens.expiresIn * 1000; state.sessionReady = false;
-    },
-    profile(state, action: PayloadAction<ConsumerProfile>) {
-      state.profile = action.payload; state.profileFetchedAt = Date.now();
-    },
-    rotate(state, action: PayloadAction<ConsumerTokens>) {
-      state.tokens = action.payload;
-      state.expiresAt = Date.now() + action.payload.expiresIn * 1000;
-    },
-    ready(state, action: PayloadAction<boolean>) { state.sessionReady = action.payload; },
-    surveyDone(state) { state.surveyPending = false; },
-    clear: () => ({ ...initialState }),
+let writes: Promise<void> = Promise.resolve();
+let lastWritten: string | undefined;
+
+function pickPersisted(state: IdentityData): PersistedIdentity {
+  return {
+    tokens: state.tokens, profile: state.profile, phone: state.phone, expiresAt: state.expiresAt,
+    profileFetchedAt: state.profileFetchedAt, surveyPending: state.surveyPending,
+  };
+}
+
+/** redux-persist stored every whitelisted field as its own JSON string. */
+function fromReduxPersist(raw: Record<string, unknown>): Partial<PersistedIdentity> {
+  const payload: Partial<PersistedIdentity> = {};
+  for (const key of PERSISTED_KEYS) {
+    if (typeof raw[key] === "string") (payload as Record<string, unknown>)[key] = JSON.parse(raw[key] as string);
+  }
+  return payload;
+}
+
+const identityStorage: PersistStorage<PersistedIdentity> = {
+  async getItem(name) {
+    try {
+      const raw = await encryptedStorage.getItem(name);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as StorageValue<PersistedIdentity> | Record<string, unknown>;
+      const state = parsed && typeof parsed === "object" && "state" in parsed && "version" in parsed
+        ? (parsed as StorageValue<PersistedIdentity>).state
+        : fromReduxPersist(parsed as Record<string, unknown>);
+      return { state: state as PersistedIdentity, version: STORE_VERSION };
+    } catch (error) {
+      hydrationError = error;
+      throw new Error("SESSION_STORAGE_FAILED");
+    }
   },
-});
-const reducer = persistReducer({
-  key: "bassera_identity", version: 2,
-  storage: {
-    ...encryptedStorage,
-    async setItem(key: string, value: string) {
-      if (hydrationError) throw new Error("SESSION_STORAGE_FAILED");
-      return encryptedStorage.setItem(key, value);
-    },
-    async getItem(key: string) {
-      try { return await encryptedStorage.getItem(key); }
-      catch (error) { hydrationError = error; throw error; }
-    },
+  setItem(name, value) {
+    // Encryption is async, so writes are queued to keep an older snapshot from landing last.
+    const write = writes.catch(() => undefined).then(async () => {
+      // Never overwrite an unread or unreadable session with in-memory defaults.
+      if (hydrationError || !useAuthStore.persist.hasHydrated()) throw new Error("SESSION_STORAGE_FAILED");
+      // Non-persisted changes (e.g. sessionReady) produce an identical snapshot; skip re-encrypting it.
+      const serialized = JSON.stringify(value);
+      if (serialized === lastWritten) return;
+      await encryptedStorage.setItem(name, serialized);
+      lastWritten = serialized;
+    });
+    writes = write;
+    return write;
   },
-  whitelist: ["tokens", "profile", "phone", "expiresAt", "profileFetchedAt", "surveyPending"],
-  writeFailHandler: (error: unknown) => { persistenceError = error; },
-}, slice.reducer);
-export const identityStore = configureStore({
-  reducer,
-  devTools: false,
-  middleware: (getDefault) => getDefault({
-    serializableCheck: { ignoredActions: [FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER] },
-  }),
-});
-// redux-persist supports manualPersist at runtime but omits it from its public types.
-const persistOptions: PersistorOptions & { manualPersist: boolean } = { manualPersist: true };
-export const identityPersistor = persistStore(identityStore, persistOptions);
+  removeItem: (name) => encryptedStorage.removeItem(name),
+};
+
+export const useAuthStore = create<IdentityState>()(
+  persist(
+    () => ({ ...initialData, saveSession, clearSession }),
+    {
+      name: AUTH_STORAGE_KEY,
+      version: STORE_VERSION,
+      storage: identityStorage,
+      skipHydration: true,
+      partialize: pickPersisted,
+      onRehydrateStorage: () => (_state, error) => {
+        if (error) hydrationError ??= error;
+      },
+    },
+  ),
+);
+
+/** Applies a state change and resolves once its encrypted write has completed. */
+function commit(partial: Partial<IdentityData>): Promise<void> {
+  // The persist middleware returns the storage write promise from setState.
+  return Promise.resolve(useAuthStore.setState(partial) as unknown as Promise<void>);
+}
+async function commitOrFail(partial: Partial<IdentityData>): Promise<void> {
+  try { await commit(partial); }
+  catch { throw new Error("SESSION_STORAGE_FAILED"); }
+}
+function setReady(sessionReady: boolean): void {
+  void commit({ sessionReady }).catch(() => undefined);
+}
+function sessionData(tokens: ConsumerTokens, phone?: string | null, newUser = false): Partial<IdentityData> {
+  return {
+    tokens, profile: null, profileFetchedAt: 0, phone: phone ?? null, surveyPending: newUser === true,
+    expiresAt: Date.now() + tokens.expiresIn * 1000, sessionReady: false,
+  };
+}
+
 let hydration: Promise<void> | undefined;
 let bootstrapped = false;
 let operations = Promise.resolve();
@@ -95,37 +141,14 @@ export function sessionFromVerification(result: OtpVerificationResult): Consumer
   if (result?.mfaRequired !== false || !result.tokens) throw new Error("INVALID_SESSION");
   return validateSession(result.tokens);
 }
-async function flush() {
-  await identityPersistor.flush();
-  if (persistenceError) throw new Error("SESSION_STORAGE_FAILED");
-}
 export function ensureAuthHydrated(): Promise<void> {
   if (bootstrapped) return Promise.resolve();
   if (!hydration) {
     hydration = (async () => {
-      if (identityPersistor.getState().bootstrapped && hydrationError) {
-        const raw = await encryptedStorage.getItem(AUTH_STORAGE_KEY);
-        const serialized = raw ? JSON.parse(raw) : {};
-        const payload: Partial<IdentityState> = {};
-        for (const key of ["tokens", "profile", "phone", "expiresAt", "profileFetchedAt", "surveyPending"] as const) {
-          if (serialized[key] !== undefined) (payload as Record<string, unknown>)[key] = JSON.parse(serialized[key]);
-        }
-        if (payload.tokens) validateSession(payload.tokens);
-        if (payload.profile && payload.profile.id !== payload.tokens?.userId) throw new Error("INVALID_PROFILE");
-        hydrationError = undefined;
-        persistenceError = undefined;
-        identityStore.dispatch({ type: REHYDRATE, key: "bassera_identity", payload });
-      } else {
-        hydrationError = undefined;
-        identityPersistor.persist();
-        if (!identityPersistor.getState().bootstrapped) await new Promise<void>((resolve) => {
-          const unsubscribe = identityPersistor.subscribe(() => {
-            if (identityPersistor.getState().bootstrapped) { unsubscribe(); resolve(); }
-          });
-        });
-      }
-      if (hydrationError) throw new Error("SESSION_STORAGE_FAILED");
-      const state = identityStore.getState();
+      hydrationError = undefined;
+      await useAuthStore.persist.rehydrate();
+      if (hydrationError || !useAuthStore.persist.hasHydrated()) throw new Error("SESSION_STORAGE_FAILED");
+      const state = useAuthStore.getState();
       if (state.tokens) {
         validateSession(state.tokens);
         if (state.profile && state.profile.id !== state.tokens.userId) throw new Error("INVALID_PROFILE");
@@ -133,21 +156,16 @@ export function ensureAuthHydrated(): Promise<void> {
         const legacy = await AsyncStorage.getItem(LEGACY_KEY);
         if (legacy) {
           const parsed = JSON.parse(legacy);
-          if (parsed.state?.tokens) {
-            identityStore.dispatch(slice.actions.session({ tokens: validateSession(parsed.state.tokens) }));
-            persistenceError = undefined;
-            await flush();
-          }
+          if (parsed.state?.tokens) await commitOrFail(sessionData(validateSession(parsed.state.tokens)));
           await AsyncStorage.removeItem(LEGACY_KEY);
         }
       }
-      // Covers a crash after the encrypted write but before legacy cleanup.
-      persistenceError = undefined;
-      await flush();
+      // Rewrites redux-persist data in the current format and covers a crash before legacy cleanup.
+      await commitOrFail({});
       await AsyncStorage.removeItem(LEGACY_KEY);
       await AsyncStorage.removeItem("@bassera_access_token");
       bootstrapped = true;
-      identityStore.dispatch(slice.actions.ready(!!identityStore.getState().tokens));
+      setReady(!!useAuthStore.getState().tokens);
     })();
     void hydration.catch(() => { hydration = undefined; });
   }
@@ -163,50 +181,41 @@ async function saveSession(raw: ConsumerTokens, phone?: string, newUser = false)
   await ensureAuthHydrated();
   const tokens = validateSession(raw);
   return serialize(async () => {
-    persistenceError = undefined;
-    identityStore.dispatch(slice.actions.session({ tokens, phone, newUser }));
     try {
-      await flush();
-      identityStore.dispatch(slice.actions.ready(true));
+      await commit(sessionData(tokens, phone, newUser));
     } catch {
-      identityStore.dispatch(slice.actions.clear());
-      await identityPersistor.flush();
+      await commit({ ...initialData }).catch(() => undefined);
       throw new Error("SESSION_STORAGE_FAILED");
     }
+    setReady(true);
   });
 }
 export async function saveConsumerProfile(profile: ConsumerProfile): Promise<void> {
   await ensureAuthHydrated();
   return serialize(async () => {
-    if (!profile || profile.id !== identityStore.getState().tokens?.userId) throw new Error("INVALID_PROFILE");
-    persistenceError = undefined;
-    identityStore.dispatch(slice.actions.profile(profile));
-    await flush();
+    if (!profile || profile.id !== useAuthStore.getState().tokens?.userId) throw new Error("INVALID_PROFILE");
+    await commitOrFail({ profile, profileFetchedAt: Date.now() });
   });
 }
 export async function markSurveyComplete(): Promise<void> {
   await ensureAuthHydrated();
   return serialize(async () => {
-    if (!identityStore.getState().surveyPending) return;
-    persistenceError = undefined;
-    identityStore.dispatch(slice.actions.surveyDone());
-    await flush();
+    if (!useAuthStore.getState().surveyPending) return;
+    await commitOrFail({ surveyPending: false });
   });
 }
 export async function rotateSession(raw: ConsumerTokens, previousRefreshToken: string): Promise<void> {
   const tokens = validateSession(raw);
   return serialize(async () => {
-    const current = identityStore.getState().tokens;
+    const current = useAuthStore.getState().tokens;
     if (!current || current.refreshToken !== previousRefreshToken || current.userId !== tokens.userId) {
       throw new Error("INVALID_SESSION");
     }
-    persistenceError = undefined;
-    identityStore.dispatch(slice.actions.rotate(tokens));
-    try { await flush(); }
-    catch {
+    try {
+      await commit({ tokens, expiresAt: Date.now() + tokens.expiresIn * 1000 });
+    } catch {
       // The server revoked the old refresh token; never roll back to it.
-      identityStore.dispatch(slice.actions.clear());
-      await identityPersistor.flush();
+      await commit({ ...initialData }).catch(() => undefined);
       throw new Error("SESSION_STORAGE_FAILED");
     }
   });
@@ -214,25 +223,14 @@ export async function rotateSession(raw: ConsumerTokens, previousRefreshToken: s
 async function clearSession(): Promise<void> {
   await ensureAuthHydrated();
   return serialize(async () => {
-    const previous = identityStore.getState();
-    persistenceError = undefined;
-    identityStore.dispatch(slice.actions.clear());
-    try { await flush(); await AsyncStorage.removeItem(LEGACY_KEY); }
-    catch {
-      // Retain the previous in-memory session if durable logout failed.
-      if (previous.tokens) {
-        identityStore.dispatch(slice.actions.session({ tokens: previous.tokens, phone: previous.phone, newUser: previous.surveyPending }));
-        if (previous.profile) identityStore.dispatch(slice.actions.profile(previous.profile));
-        identityStore.dispatch(slice.actions.ready(previous.sessionReady));
-      }
+    const { saveSession: _save, clearSession: _clear, ...previous } = useAuthStore.getState();
+    try {
+      await commit({ ...initialData });
+      await AsyncStorage.removeItem(LEGACY_KEY);
+    } catch {
+      // Retain the previous session if durable logout failed.
+      if (previous.tokens) void commit(previous).catch(() => undefined);
       throw new Error("SESSION_STORAGE_FAILED");
     }
   });
 }
-function getState() { return { ...identityStore.getState(), saveSession, clearSession }; }
-// Compatibility facade for existing callers; all state is now Redux, not Zustand.
-export const useAuthStore = Object.assign(
-  <T>(selector: (state: ReturnType<typeof getState>) => T): T =>
-    useSelector(() => selector(getState())),
-  { getState },
-);

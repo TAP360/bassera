@@ -19,6 +19,7 @@ export * from './consumerTokens';
 export * from './emailOtpRequestInput';
 export * from './emailOtpVerificationInput';
 export * from './localizedText';
+export * from './logoutSessionBody';
 export * from './otpRequestInput';
 export * from './otpRequestInputLanguage';
 export * from './otpRequestResult';

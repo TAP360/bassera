@@ -14,7 +14,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 
-import { useApp } from "@/context/AppContext";
+import { useAppStore } from "@/stores/appStore";
 import { useColors } from "@/hooks/useColors";
 import {
   useCreateTransaction,
@@ -41,7 +41,7 @@ const NUMPAD = [
 export function AddExpenseModal({ visible, onClose, initialType = "expense" }: Props) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { addTransaction } = useApp();
+  const addTransaction = useAppStore((state) => state.addTransaction);
   const { isAuthenticated } = useConsumerSession();
   const createTransaction = useCreateTransaction();
   const { t, isRTL } = useLocalization();

@@ -19,7 +19,7 @@ import { useEffect } from "react";
 import { useCreateGoalPlan, type GoalPlanInput } from "@workspace/api-client-react";
 
 import { FORECAST_QUESTIONS } from "@/components/ForecastCoachWidget";
-import { useApp } from "@/context/AppContext";
+import { useProfile } from "@/hooks/useProfile";
 import { useColors } from "@/hooks/useColors";
 import { useLocalization } from "@/localization";
 
@@ -78,7 +78,7 @@ export default function CoachScreen() {
     forecastRequest?: string;
   }>();
   const insets = useSafeAreaInsets();
-  const { profile } = useApp();
+  const { profile } = useProfile();
   const { t, isRTL } = useLocalization();
   const textAlign = isRTL ? "right" : "left";
   const goalPlan = useCreateGoalPlan();

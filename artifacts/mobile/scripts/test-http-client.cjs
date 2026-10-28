@@ -107,8 +107,8 @@ async function main() {
   assert.equal(cipher.includes("test-token-only"), false);
   assert.equal(cipher.includes("test-refresh-only"), false);
   const persisted = JSON.parse(await secureStorage.encryptedStorage.getItem(storeModule.AUTH_STORAGE_KEY));
-  assert.equal(JSON.parse(persisted.tokens).refreshToken, "test-refresh-only");
-  assert.equal(persisted.sessionReady, undefined);
+  assert.equal(persisted.state.tokens.refreshToken, "test-refresh-only");
+  assert.equal(persisted.state.sessionReady, undefined);
   const restoredModule = createStoreModule();
   await restoredModule.ensureAuthHydrated();
   assert.equal(restoredModule.useAuthStore.getState().tokens.accessToken, "test-token-only");
@@ -139,7 +139,7 @@ async function main() {
 
   let language = "ar";
   let languageError;
-  const { httpClient, HTTP_BASE_URL } = loadSource("utils/httpClient.ts", {
+  const clientModule = loadSource("utils/httpClient.ts", {
     "@/stores/authStore": storeModule,
     "react-native": { Platform: { OS: "ios" } },
     "@/localization/preferences": {
@@ -150,6 +150,7 @@ async function main() {
     },
     "@/storage/authToken": tokenStore,
   });
+  const { httpClient, HTTP_BASE_URL } = clientModule;
   assert.equal(HTTP_BASE_URL, "https://nero.tap-360.com");
   const oldDomain = process.env.EXPO_PUBLIC_DOMAIN;
   const oldIdentityUrl = process.env.EXPO_PUBLIC_IDENTITY_API_URL;
@@ -254,6 +255,7 @@ async function main() {
   const session = loadSource("hooks/useConsumerSession.ts", {
     "@workspace/api-client-react": api,
     "@/stores/authStore": storeModule,
+    "@/utils/httpClient": clientModule,
     "@/utils/identityTransport": {},
   });
   const me = await cache.fetchQuery(session.consumerQueryOptions(storeModule.useAuthStore.getState().tokens));
@@ -269,10 +271,43 @@ async function main() {
   for (const call of calls.slice(0, 3)) assert.equal(call.headers.has("Authorization"), false);
   assert.equal(calls[3].headers.get("Authorization"), "Bearer verified-token");
   await assert.rejects(cache.fetchQuery(session.consumerQueryOptions({ ...tokens(), userId: "wrong-consumer" })), /INVALID_PROFILE/);
+  const logoutCalls = [];
+  clientModule.refreshClient.defaults.adapter = async (config) => {
+    logoutCalls.push(config);
+    return { data: "", status: 204, statusText: "No Content", headers: {}, config };
+  };
+  cache.setQueryData(["goals", "test-consumer"], [{ id: "cached-goal" }]);
   await session.logoutSession(cache);
+  assert.equal(logoutCalls.length, 1, "Sign-out revokes the session on the server exactly once");
+  assert.equal(logoutCalls[0].method, "post");
+  assert.equal(logoutCalls[0].url, "/v1/identity/auth/logout");
+  assert.deepEqual(JSON.parse(logoutCalls[0].data), { refreshToken: "test-refresh-only" }, "Only this device is signed out");
+  assert.equal(logoutCalls[0].headers.get("Authorization"), "Bearer verified-token");
+  assert.equal(logoutCalls[0].headers.get("Accept-Language"), "en");
   assert.equal(await tokenStore.getAuthToken(), null);
-  assert.equal(JSON.parse(JSON.parse(await secureStorage.encryptedStorage.getItem(storeModule.AUTH_STORAGE_KEY)).tokens), null);
+  assert.equal(JSON.parse(await secureStorage.encryptedStorage.getItem(storeModule.AUTH_STORAGE_KEY)).state.tokens, null);
   assert.equal(cache.getQueryData(session.consumerQueryKey("test-consumer")), undefined);
+  assert.equal(cache.getQueryData(["goals", "test-consumer"]), undefined, "Other cached account data is cleared too");
+  await tokenStore.setAuthTokens(tokens("offline-token"));
+  clientModule.refreshClient.defaults.adapter = async (config) => {
+    throw new axios.AxiosError("Network Error", "ERR_NETWORK", config);
+  };
+  await session.logoutSession(cache);
+  assert.equal(await tokenStore.getAuthToken(), null, "Sign-out completes locally when the server is unreachable");
+  await tokenStore.setAuthTokens({ ...tokens("expired-access"), expiresIn: 1 });
+  const expiredLogout = [];
+  clientModule.refreshClient.defaults.adapter = async (config) => {
+    expiredLogout.push(config);
+    if (config.url === "/v1/identity/auth/refresh") {
+      return { data: { ...tokens("fresh-access"), refreshToken: "fresh-refresh" }, status: 200, statusText: "OK", headers: {}, config };
+    }
+    return { data: "", status: 204, statusText: "No Content", headers: {}, config };
+  };
+  await session.logoutSession(cache);
+  assert.deepEqual(expiredLogout.map((config) => config.url), ["/v1/identity/auth/refresh", "/v1/identity/auth/logout"]);
+  assert.deepEqual(JSON.parse(expiredLogout[1].data), { refreshToken: "fresh-refresh" }, "An expiring session is rotated, then the current token is revoked");
+  assert.equal(expiredLogout[1].headers.get("Authorization"), "Bearer fresh-access");
+  assert.equal(await tokenStore.getAuthToken(), null);
   cache.clear();
   const emailOtpCalls = [];
   httpClient.defaults.adapter = async (config) => {
@@ -313,7 +348,7 @@ async function main() {
   }
   await storeModule.useAuthStore.getState().saveSession(tokens("new-user-token"), undefined, true);
   assert.equal(storeModule.useAuthStore.getState().surveyPending, true, "First-time users must be routed to the survey");
-  assert.equal(JSON.parse(JSON.parse(await secureStorage.encryptedStorage.getItem(storeModule.AUTH_STORAGE_KEY)).surveyPending), true);
+  assert.equal(JSON.parse(await secureStorage.encryptedStorage.getItem(storeModule.AUTH_STORAGE_KEY)).state.surveyPending, true);
   await storeModule.markSurveyComplete();
   assert.equal(storeModule.useAuthStore.getState().surveyPending, false);
   await storeModule.useAuthStore.getState().saveSession(tokens("returning-token"));
@@ -376,7 +411,6 @@ async function main() {
   await assert.rejects(storeModule.saveConsumerProfile({ id: "wrong-person" }), /INVALID_PROFILE/);
   await tokenStore.clearAuthToken();
   assert.equal(storeModule.useAuthStore.getState().profile, null);
-  for (const instance of modules) { await instance.identityPersistor.flush(); instance.identityPersistor.pause(); }
   values.delete(storeModule.AUTH_STORAGE_KEY);
   values.set("@bassera_auth_session", JSON.stringify({ state: { tokens: tokens("legacy-token") }, version: 1 }));
   const migrated = createStoreModule();
@@ -384,8 +418,95 @@ async function main() {
   assert.equal(migrated.useAuthStore.getState().tokens.accessToken, "legacy-token");
   assert.equal(values.has("@bassera_auth_session"), false);
   assert.equal(values.get(storeModule.AUTH_STORAGE_KEY).includes("legacy-token"), false);
-  await migrated.identityPersistor.flush();
-  migrated.identityPersistor.pause();
+  // Sessions written by the former redux-persist store (one JSON string per field) must survive the upgrade.
+  await secureStorage.encryptedStorage.setItem(storeModule.AUTH_STORAGE_KEY, JSON.stringify({
+    tokens: JSON.stringify(tokens("redux-token")),
+    profile: JSON.stringify({ id: "test-consumer", name: "Redux profile" }),
+    phone: JSON.stringify("+201012345678"),
+    expiresAt: JSON.stringify(Date.now() + 900_000),
+    profileFetchedAt: JSON.stringify(1),
+    surveyPending: JSON.stringify(false),
+    _persist: JSON.stringify({ version: 2, rehydrated: true }),
+  }));
+  const fromRedux = createStoreModule();
+  await fromRedux.ensureAuthHydrated();
+  assert.equal(fromRedux.useAuthStore.getState().tokens.accessToken, "redux-token");
+  assert.equal(fromRedux.useAuthStore.getState().profile.name, "Redux profile");
+  assert.equal(fromRedux.useAuthStore.getState().phone, "+201012345678");
+  assert.equal(fromRedux.useAuthStore.getState().sessionReady, true);
+  const rewritten = JSON.parse(await secureStorage.encryptedStorage.getItem(storeModule.AUTH_STORAGE_KEY));
+  assert.equal(rewritten.state.tokens.accessToken, "redux-token", "Legacy data is rewritten in the Zustand format");
+  assert.equal(rewritten._persist, undefined);
+  readError = new Error("Storage unavailable");
+  const unreadable = createStoreModule();
+  await assert.rejects(unreadable.ensureAuthHydrated(), /SESSION_STORAGE_FAILED/);
+  await assert.rejects(unreadable.useAuthStore.getState().saveSession(tokens("must-not-overwrite")), /SESSION_STORAGE_FAILED/);
+  readError = undefined;
+  assert.equal(JSON.parse(await secureStorage.encryptedStorage.getItem(storeModule.AUTH_STORAGE_KEY)).state.tokens.accessToken, "redux-token",
+    "A failed read must never overwrite the saved session");
+  await unreadable.ensureAuthHydrated();
+  assert.equal(unreadable.useAuthStore.getState().tokens.accessToken, "redux-token", "Hydration can be retried");
+
+  const encryptedPersist = loadSource("stores/encryptedPersist.ts", { "@/storage/encryptedStorage": secureStorage });
+  const appStoreModule = () => loadSource("stores/appStore.ts", { "./encryptedPersist": encryptedPersist });
+  await secureStorage.encryptedStorage.setItem("@mindwealth_state", JSON.stringify({
+    hasOnboarded: true, mood: "good", profile: { name: "Legacy", email: "legacy@example.invalid", photoUri: "file://photo.jpg" },
+    linkedAccounts: [{ id: "a1", institution: "Bank", label: "Main", kind: "checking", source: "manual", createdAt: "2026-01-01" }],
+  }));
+  const appData = appStoreModule();
+  await appData.hydrateAppStore();
+  const appState = appData.useAppStore.getState();
+  assert.equal(appState.hasOnboarded, true, "Former AppContext data is migrated");
+  assert.equal(appState.mood, "good");
+  assert.equal(appState.profile.photoUri, "file://photo.jpg");
+  assert.equal(appState.profile.name, undefined, "Name/email come from the identity API, not local storage");
+  assert.equal(appState.profile.subscription, "free");
+  assert.equal(appState.linkedAccounts.length, 1);
+  appState.setMood("anxious");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const savedApp = JSON.parse(await secureStorage.encryptedStorage.getItem("@mindwealth_state"));
+  assert.equal(savedApp.state.mood, "anxious");
+  assert.equal(savedApp.state.setMood, undefined, "Actions are never persisted");
+  assert.equal(values.get("@mindwealth_state").includes("anxious"), false, "App data is encrypted at rest");
+  const appCipher = values.get("@mindwealth_state");
+  values.set("@mindwealth_state", appCipher.slice(0, -2) + (appCipher.endsWith("00") ? "01" : "00"));
+  const lockedApp = appStoreModule();
+  await assert.rejects(lockedApp.hydrateAppStore(), /APP_STORAGE_FAILED/);
+  lockedApp.useAppStore.getState().setMood("great");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  values.set("@mindwealth_state", appCipher);
+  assert.equal(JSON.parse(await secureStorage.encryptedStorage.getItem("@mindwealth_state")).state.mood, "anxious");
+
+  const appliedSchemes = [];
+  const reactNativeMock = { Platform: { OS: "ios" }, Appearance: { setColorScheme: (scheme) => appliedSchemes.push(scheme) } };
+  const preferencesModule = () => loadSource("stores/preferencesStore.ts", {
+    "react-native": reactNativeMock,
+    "./encryptedPersist": encryptedPersist,
+  });
+  const prefs = preferencesModule();
+  assert.deepEqual(
+    prefs.sanitizePreferences({ currency: "XYZ", theme: "dark", biometric: "yes", notifications: false, extra: 1 }),
+    { theme: "dark", notifications: false },
+    "Unknown currencies/themes and mistyped server values are ignored",
+  );
+  await prefs.hydratePreferencesStore();
+  assert.deepEqual(appliedSchemes, ["unspecified"], "System appearance follows the device");
+  prefs.usePreferencesStore.getState().setPreferences({ theme: "dark", currency: "SAR", biometric: true });
+  assert.equal(appliedSchemes.at(-1), "dark", "Appearance is applied app-wide immediately");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const savedPrefs = JSON.parse(await secureStorage.encryptedStorage.getItem(prefs.PREFERENCES_STORAGE_KEY));
+  assert.deepEqual(savedPrefs.state, { currency: "SAR", theme: "dark", biometric: true, notifications: true });
+  assert.equal(values.get(prefs.PREFERENCES_STORAGE_KEY).includes("SAR"), false, "Preferences are encrypted at rest");
+  prefs.usePreferencesStore.getState().resetAccountPreferences();
+  assert.equal(prefs.usePreferencesStore.getState().biometric, false, "Sign-out turns off the biometric lock");
+  assert.equal(prefs.usePreferencesStore.getState().currency, "EGP");
+  assert.equal(prefs.usePreferencesStore.getState().theme, "dark", "Appearance is a device choice kept after sign-out");
+  prefs.usePreferencesStore.getState().setPreferences({ currency: "KWD" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const restoredPrefs = preferencesModule();
+  await restoredPrefs.hydratePreferencesStore();
+  assert.equal(restoredPrefs.usePreferencesStore.getState().currency, "KWD");
+  assert.equal(appliedSchemes.at(-1), "dark", "Saved appearance is applied on launch");
   const secureKeys = new Map();
   const nativeStorage = loadSource("storage/encryptedStorage.native.ts", {
     "./encryptedStorageCore": storageCore,
@@ -406,6 +527,18 @@ async function main() {
   httpClient.defaults.adapter = async (config) => ({ data: { id: "test-consumer", name: "Updated API Name" }, status: 200, statusText: "OK", headers: {}, config });
   const edited = await api.updateCurrentConsumer({ name: "Updated API Name" });
   assert.equal(edited.name, "Updated API Name");
+  let preferencesUpdate;
+  httpClient.defaults.adapter = async (config) => {
+    preferencesUpdate = config;
+    return { data: { id: "test-consumer", language: "ar", preferences: JSON.parse(config.data).preferences }, status: 200, statusText: "OK", headers: {}, config };
+  };
+  const preferencesJson = JSON.stringify({ currency: "AED", theme: "dark", biometric: true, notifications: false, legacyKey: 1 });
+  const withPreferences = await api.updateCurrentConsumer({ language: "ar", preferences: preferencesJson });
+  assert.equal(preferencesUpdate.method, "put");
+  assert.equal(preferencesUpdate.url, "/v1/identity/consumer/me");
+  assert.deepEqual(JSON.parse(preferencesUpdate.data), { language: "ar", preferences: preferencesJson },
+    "Preferences are sent as a JSON-encoded string alongside the language");
+  assert.equal(JSON.parse(withPreferences.preferences).legacyKey, 1, "Unmanaged preference keys round-trip");
   const rotatingStore = createStoreModule();
   const rotatingTokens = loadSource("storage/authToken.ts", { "@/stores/authStore": rotatingStore });
   const clients = loadSource("utils/httpClient.ts", {
@@ -450,7 +583,6 @@ async function main() {
   assert.equal(restoredRotation.useAuthStore.getState().tokens.refreshToken, "second-refresh");
   assert.equal(restoredRotation.useAuthStore.getState().profile.name, "Refresh profile");
   assert.equal(values.get(rotatingStore.AUTH_STORAGE_KEY).includes("second-refresh"), false);
-  await restoredRotation.identityPersistor.flush(); restoredRotation.identityPersistor.pause();
   clients.httpClient.defaults.adapter = async (config) => {
     throw new (require("axios").AxiosError)("Expired", "ERR_BAD_REQUEST", config, undefined,
       { data: {}, status: 401, statusText: "Unauthorized", headers: {}, config });
@@ -463,9 +595,10 @@ async function main() {
   assert.equal(rotatingStore.useAuthStore.getState().tokens, null);
   assert.equal(rotatingStore.useAuthStore.getState().profile, null);
   await assert.rejects(rotatingStore.rotateSession(tokens("late-access"), "second-refresh"), /INVALID_SESSION/);
-  await rotatingStore.identityPersistor.flush(); rotatingStore.identityPersistor.pause();
+  assert.equal(JSON.parse(await secureStorage.encryptedStorage.getItem(rotatingStore.AUTH_STORAGE_KEY)).state.tokens, null,
+    "A revoked session is durably cleared");
   console.log("Refresh checks passed: documented contract, single-flight expiry/401 rotation, encrypted durability, retained profile, revoked-token logout and late-response protection.");
-  console.log("Mobile auth checks passed: AES-GCM encryption/tamper protection, encrypted Redux token/profile restore and logout, migration, persistence failures, API contracts, languages, headers and cache isolation.");
+  console.log("Mobile auth checks passed: AES-GCM encryption/tamper protection, encrypted Zustand token/profile restore and logout, redux-persist and legacy migration, persistence failures, encrypted app data, API contracts, languages, headers and cache isolation.");
 }
 
 main().catch((error) => {

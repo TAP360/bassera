@@ -13,4 +13,9 @@ export interface ConsumerProfileUpdateInput {
   language?: string | null;
   /** @nullable */
   halalMode?: boolean | null;
+  /**
+     * JSON-encoded preferences object (stored as JSONB), e.g. {"currency":"EGP","notifications":true,"biometric":false,"theme":"system"}. Replaces the stored value, so clients send the full merged object.
+     * @nullable
+     */
+  preferences?: string | null;
 }

@@ -14,8 +14,7 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { useApp } from '@/context/AppContext';
-import type { LinkedAccountKind } from '@/context/AppContext';
+import { useAppStore, type LinkedAccountKind } from '@/stores/appStore';
 import { useColors } from '@/hooks/useColors';
 import { useLocalization } from '@/localization';
 
@@ -26,7 +25,7 @@ export default function AddLinkedAccountScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { addLinkedAccount } = useApp();
+  const addLinkedAccount = useAppStore((state) => state.addLinkedAccount);
   const { t, isRTL } = useLocalization();
   const textAlign = isRTL ? 'right' : 'left';
   const [mode, setMode] = useState<AddMode>('manual');

@@ -3,6 +3,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Image,
   Platform,
@@ -16,12 +17,17 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 
-import { useApp } from "@/context/AppContext";
+import { OptionPicker } from "@/components/OptionPicker";
 import { useColors } from "@/hooks/useColors";
-import { useLocalization } from "@/localization";
+import { useLocalization, type Language } from "@/localization";
 import { showProfilePhotoOptions } from "@/utils/profilePhoto";
-import { useConsumerSession, useSessionLogout } from "@/hooks/useConsumerSession";
+import { usePreferences, useSavePreferences } from "@/hooks/usePreferences";
+import { useHalalModeToggle, useProfile } from "@/hooks/useProfile";
+import { useSignOut } from "@/hooks/useSignOut";
+import { useAppStore } from "@/stores/appStore";
+import { CURRENCIES, THEMES, type Preferences } from "@/stores/preferencesStore";
 import { authErrorMessage } from "@/utils/authErrors";
+import { authenticateWithBiometrics, isBiometricAvailable } from "@/utils/biometrics";
 import { localize } from "@/utils/questionnaireScoring";
 
 const personalityColors: Record<string, string> = {
@@ -61,18 +67,32 @@ const PLAN_FEATURES = {
   ],
 };
 
+interface SettingsItem {
+  icon: string;
+  label: string;
+  value?: string | boolean;
+  arrow?: boolean;
+  toggle?: boolean;
+  disabled?: boolean;
+  onPress?: () => void;
+  onToggle?: (value: boolean) => void;
+}
+
 export default function ProfileScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { profile, clearData, updateProfile } = useApp();
-  const { language, setLanguage, t, isRTL } = useLocalization();
+  const { profile } = useProfile();
+  const updateLocalProfile = useAppStore((state) => state.updateLocalProfile);
+  const halalMode = useHalalModeToggle();
+  const preferences = usePreferences();
+  const savePreferences = useSavePreferences();
+  const { language, t, isRTL } = useLocalization();
   const textAlign = isRTL ? "right" : "left";
-  const { data: consumer } = useConsumerSession();
-  const logout = useSessionLogout();
-  const displayName = consumer?.name?.trim() || (language === "ar" ? "عضو بصيرة" : "Bassera member");
-  const [notifications, setNotifications] = useState(true);
+  const signOut = useSignOut();
+  const displayName = profile.name;
+  const [picker, setPicker] = useState<"currency" | "theme" | "language" | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
   const [nudges, setNudges] = useState(true);
-  const [darkMode, setDarkMode] = useState(false);
   const router = useRouter();
   const topPad = Platform.OS === "android" ? insets.top + 20 : insets.top;
   // The fixed tab bar overlays the scroll view on web and native platforms.
@@ -99,20 +119,68 @@ export default function ProfileScreen() {
           : t("profile.free"),
   };
   const choosePhoto = () =>
-    showProfilePhotoOptions(t, (photoUri) => updateProfile({ photoUri }));
-  const performSignOut = async () => {
+    showProfilePhotoOptions(t, (photoUri) => updateLocalProfile({ photoUri }));
+  const memberSince = profile.createdAt
+    ? profile.memberSince
+    : t(({ "Jan 2025": "data.jan2025" } as Record<string, string>)[profile.memberSince] ?? profile.memberSince);
+  const statusKey = `profile.status.${profile.accountStatus?.toUpperCase() ?? ""}`;
+  const accountStatus = !profile.accountStatus
+    ? ""
+    : t(statusKey) === statusKey
+      ? profile.accountStatus
+      : t(statusKey);
+  const showError = (title: string, error: unknown) => {
+    const message = authErrorMessage(error, language);
+    if (Platform.OS === "web") window.alert(message);
+    else Alert.alert(title, message);
+  };
+  const toggleHalalMode = async (value: boolean) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     try {
-      await logout();
-      await clearData();
+      await halalMode.setHalalMode(value);
+    } catch (error) {
+      showError(t("profile.halalMode"), error);
+    }
+  };
+  const updatePreferences = async (title: string, changes: Partial<Preferences> & { language?: Language }) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    try {
+      await savePreferences.save(changes);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      showError(title, error);
+    }
+  };
+  const toggleBiometric = async (enable: boolean) => {
+    if (enable && !(await isBiometricAvailable())) {
+      Alert.alert(t("profile.biometric"), t("biometric.unavailable"));
+      return;
+    }
+    const result = await authenticateWithBiometrics(
+      t(enable ? "biometric.enablePrompt" : "biometric.disablePrompt"),
+      t("common.cancel"),
+    );
+    if (result === "cancelled") return;
+    if (enable && result === "unavailable") {
+      Alert.alert(t("profile.biometric"), t("biometric.unavailable"));
+      return;
+    }
+    await updatePreferences(t("profile.biometric"), { biometric: enable });
+  };
+  const performSignOut = async () => {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      await signOut();
       router.replace("/login");
     } catch (error) {
-      const message = authErrorMessage(error, language);
-      if (Platform.OS === "web") window.alert(message);
-      else Alert.alert(t("profile.signOut"), message);
+      showError(t("profile.signOut"), error);
+    } finally {
+      setSigningOut(false);
     }
   };
 
-  const settingsSections = [
+  const settingsSections: { title: string; items: SettingsItem[] }[] = [
     {
       title: t("profile.account"),
       items: [
@@ -143,6 +211,9 @@ export default function ProfileScreen() {
             router.push("/payment-methods");
           },
         },
+        ...(accountStatus
+          ? [{ icon: "activity", label: t("profile.accountStatus"), value: accountStatus }]
+          : []),
       ],
     },
     {
@@ -152,8 +223,23 @@ export default function ProfileScreen() {
           icon: "bell",
           label: t("profile.notifications"),
           toggle: true,
-          value: notifications,
-          onToggle: setNotifications,
+          value: preferences.notifications,
+          disabled: savePreferences.isPending,
+          onToggle: (value) => void updatePreferences(t("profile.notifications"), { notifications: value }),
+        },
+        {
+          icon: "check-circle",
+          label: t("profile.halalMode"),
+          toggle: true,
+          value: profile.halalMode,
+          disabled: !profile.id || halalMode.isPending,
+          onToggle: toggleHalalMode,
+        },
+        {
+          icon: "dollar-sign",
+          label: t("profile.currency"),
+          value: preferences.currency,
+          onPress: () => setPicker("currency"),
         },
         {
           icon: "zap",
@@ -164,36 +250,15 @@ export default function ProfileScreen() {
         },
         {
           icon: "moon",
-          label: t("profile.darkMode"),
-          toggle: true,
-          value: darkMode,
-          onToggle: setDarkMode,
+          label: t("profile.appearance"),
+          value: t(`profile.theme.${preferences.theme}`),
+          onPress: () => setPicker("theme"),
         },
         {
           icon: "globe",
           label: t("profile.language"),
           value: language === "ar" ? t("language.arabic") : t("language.english"),
-          arrow: true,
-          onPress: () => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            Alert.alert(t("profile.languageTitle"), undefined, [
-              {
-                text: t("language.english"),
-                onPress: () => {
-                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                  void setLanguage("en");
-                },
-              },
-              {
-                text: t("language.arabic"),
-                onPress: () => {
-                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                  void setLanguage("ar");
-                },
-              },
-              { text: t("common.cancel"), style: "cancel" },
-            ]);
-          },
+          onPress: () => setPicker("language"),
         },
       ],
     },
@@ -213,15 +278,18 @@ export default function ProfileScreen() {
             );
           },
         },
-        {
-          icon: "shield",
-          label: t("profile.biometric"),
-          toggle: true,
-          value: true,
-          onToggle: () => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          },
-        },
+        ...(Platform.OS === "web"
+          ? []
+          : [
+              {
+                icon: "shield",
+                label: t("profile.biometric"),
+                toggle: true,
+                value: preferences.biometric,
+                disabled: savePreferences.isPending,
+                onToggle: (value: boolean) => void toggleBiometric(value),
+              },
+            ]),
         {
           icon: "eye-off",
           label: t("profile.privacy"),
@@ -287,6 +355,7 @@ export default function ProfileScreen() {
   ];
 
   return (
+    <>
     <ScrollView
       style={{
         flex: 1,
@@ -331,7 +400,7 @@ export default function ProfileScreen() {
           <Text style={[styles.profileName, { textAlign: "center" }]}>{displayName}</Text>
           <Feather name="edit-2" size={15} color="rgba(255,255,255,0.75)" />
         </Pressable>
-        {consumer?.email ? <Text style={[styles.profileEmail, { textAlign: "center" }]}>{consumer.email}</Text> : null}
+        {profile.email ? <Text style={[styles.profileEmail, { textAlign: "center" }]}>{profile.email}</Text> : null}
         <View style={styles.headerBadges}>
           <View
             style={[
@@ -347,7 +416,7 @@ export default function ProfileScreen() {
               {subInfo.label}
             </Text>
           </View>
-        <Text style={[styles.joinText, { textAlign: "center" }]}>{t("profile.memberSince", { date: t(({ "Jan 2025": "data.jan2025" } as Record<string, string>)[profile.joinDate] ?? profile.joinDate) })}</Text>
+        <Text style={[styles.joinText, { textAlign: "center" }]}>{t("profile.memberSince", { date: memberSince })}</Text>
         </View>
       </LinearGradient>
 
@@ -540,6 +609,7 @@ export default function ProfileScreen() {
                     {item.toggle ? (
                       <Switch
                         value={item.value as boolean}
+                        disabled={item.disabled}
                         onValueChange={item.onToggle as (v: boolean) => void}
                         trackColor={{ true: "#2E3192", false: colors.border }}
                         thumbColor="#FFFFFF"
@@ -576,8 +646,11 @@ export default function ProfileScreen() {
         ))}
 
         <Pressable
-          style={styles.signOutBtn}
+          style={[styles.signOutBtn, signingOut && { opacity: 0.6 }]}
           testID="sign-out"
+          disabled={signingOut}
+          accessibilityRole="button"
+          accessibilityState={{ busy: signingOut, disabled: signingOut }}
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             if (Platform.OS === "web") {
@@ -597,7 +670,11 @@ export default function ProfileScreen() {
           <View
             style={[styles.signOutInner, { borderColor: "#EF4444" + "40" }]}
           >
-            <Feather name="log-out" size={18} color="#EF4444" />
+            {signingOut ? (
+              <ActivityIndicator size="small" color="#EF4444" />
+            ) : (
+              <Feather name="log-out" size={18} color="#EF4444" />
+            )}
           <Text style={styles.signOutText}>{t("profile.signOut")}</Text>
           </View>
         </Pressable>
@@ -606,6 +683,34 @@ export default function ProfileScreen() {
         </Text>
       </View>
     </ScrollView>
+    <OptionPicker
+      visible={picker === "currency"}
+      title={t("profile.currencyTitle")}
+      options={CURRENCIES.map((code) => ({ value: code, label: code, description: t(`currency.${code}`) }))}
+      selected={preferences.currency}
+      onSelect={(currency) => void updatePreferences(t("profile.currency"), { currency })}
+      onClose={() => setPicker(null)}
+    />
+    <OptionPicker
+      visible={picker === "theme"}
+      title={t("profile.appearanceTitle")}
+      options={THEMES.map((theme) => ({ value: theme, label: t(`profile.theme.${theme}`) }))}
+      selected={preferences.theme}
+      onSelect={(theme) => void updatePreferences(t("profile.appearance"), { theme })}
+      onClose={() => setPicker(null)}
+    />
+    <OptionPicker<Language>
+      visible={picker === "language"}
+      title={t("profile.languageTitle")}
+      options={[
+        { value: "en", label: t("language.english") },
+        { value: "ar", label: t("language.arabic") },
+      ]}
+      selected={language}
+      onSelect={(next) => void updatePreferences(t("profile.language"), { language: next })}
+      onClose={() => setPicker(null)}
+    />
+    </>
   );
 }
 

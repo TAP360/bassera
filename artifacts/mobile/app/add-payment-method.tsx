@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
-import { useApp, type PaymentMethodKind } from '@/context/AppContext';
+import { useAppStore, type PaymentMethodKind } from '@/stores/appStore';
 import { useColors } from '@/hooks/useColors';
 import { useLocalization } from '@/localization';
 
@@ -17,7 +17,8 @@ export default function AddPaymentMethodScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { linkedAccounts, addPaymentMethod } = useApp();
+  const linkedAccounts = useAppStore((state) => state.linkedAccounts);
+  const addPaymentMethod = useAppStore((state) => state.addPaymentMethod);
   const { t, isRTL } = useLocalization();
   const textAlign: 'right' | 'left' = isRTL ? 'right' : 'left';
   const [kind, setKind] = useState<PaymentMethodKind>('account');

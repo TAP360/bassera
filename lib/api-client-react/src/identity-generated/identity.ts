@@ -30,6 +30,7 @@ import type {
   ConsumerRegistrationVerificationInput,
   ConsumerTokens,
   EmailOtpRequestInput,
+  LogoutSessionBody,
   OtpRequestInput,
   OtpRequestResult,
   OtpVerificationInput,
@@ -111,6 +112,67 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
         TContext
       > => {
       return useMutation(getRefreshConsumerSessionMutationOptions(options));
+    }
+
+/**
+ * Shared by all user types. Blacklists the access token for its remaining lifetime and revokes refresh tokens. With refreshToken only that device is signed out; without it, every device.
+ */
+export const logoutSession = (
+    logoutSessionBody?: BodyType<LogoutSessionBody>,
+ options?: SecondParameter<typeof identityRequest>,signal?: AbortSignal
+) => {
+
+
+      return identityRequest<void>(
+      {url: `/v1/identity/auth/logout`, method: 'POST',
+      headers: {'Content-Type': 'application/json', },
+      data: logoutSessionBody, signal
+    },
+      options);
+    }
+
+
+
+export const getLogoutSessionMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof logoutSession>>, TError,{data?: BodyType<LogoutSessionBody>}, TContext>, request?: SecondParameter<typeof identityRequest>}
+): UseMutationOptions<Awaited<ReturnType<typeof logoutSession>>, TError,{data?: BodyType<LogoutSessionBody>}, TContext> => {
+
+const mutationKey = ['logoutSession'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof logoutSession>>, {data?: BodyType<LogoutSessionBody>}> = (props) => {
+          const {data} = props ?? {};
+
+          return  logoutSession(data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type LogoutSessionMutationResult = NonNullable<Awaited<ReturnType<typeof logoutSession>>>
+    export type LogoutSessionMutationBody = BodyType<LogoutSessionBody> | undefined
+    export type LogoutSessionMutationError = ErrorType<unknown>
+
+    export const useLogoutSession = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof logoutSession>>, TError,{data?: BodyType<LogoutSessionBody>}, TContext>, request?: SecondParameter<typeof identityRequest>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof logoutSession>>,
+        TError,
+        {data?: BodyType<LogoutSessionBody>},
+        TContext
+      > => {
+      return useMutation(getLogoutSessionMutationOptions(options));
     }
 
 export const registerConsumer = (

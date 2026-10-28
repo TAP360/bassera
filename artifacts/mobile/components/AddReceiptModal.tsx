@@ -18,7 +18,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 
-import { useApp } from "@/context/AppContext";
+import { useAppStore } from "@/stores/appStore";
 import { useColors } from "@/hooks/useColors";
 import { useLocalization } from "@/localization";
 import { EXPENSE_CATEGORIES, EMOTION_TAGS } from "@/constants/categories";
@@ -74,7 +74,7 @@ type ReceiptStep = "scan" | "processing" | "review" | "emotion" | "feedback";
 export function AddReceiptModal({ visible, onClose }: Props) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { addTransaction } = useApp();
+  const addTransaction = useAppStore((state) => state.addTransaction);
   const { t, isRTL } = useLocalization();
   const receiptMutation = useExtractReceipt();
 

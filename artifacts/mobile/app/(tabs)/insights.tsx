@@ -19,7 +19,7 @@ import { CircularProgress } from '@/components/CircularProgress';
 import { EfiBarChart } from '@/components/EfiBarChart';
 import { ForecastCoachWidget } from '@/components/ForecastCoachWidget';
 import { InsightAssistant } from '@/components/InsightAssistant';
-import { useApp } from '@/context/AppContext';
+import { useProfile } from '@/hooks/useProfile';
 import { useColors } from '@/hooks/useColors';
 import { useLocalization } from '@/localization';
 
@@ -151,7 +151,7 @@ export default function InsightsScreen() {
   const router = useRouter();
   const { section, coach } = useLocalSearchParams<{ section?: string; coach?: string }>();
   const insets = useSafeAreaInsets();
-  const { profile } = useApp();
+  const { profile } = useProfile();
   const { t, isRTL } = useLocalization();
   const textAlign = isRTL ? 'right' : 'left';
   const [activeTab, setActiveTab] = useState<TabKey>(

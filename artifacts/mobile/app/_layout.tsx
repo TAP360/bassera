@@ -17,14 +17,15 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { setBaseUrl } from '@workspace/api-client-react';
 
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { AppProvider } from '@/context/AppContext';
+import { BiometricLock } from '@/components/BiometricLock';
 import { LocalizationProvider, useLocalization } from '@/localization';
+import { hydrateAppStore } from '@/stores/appStore';
 import { ensureAuthHydrated } from '@/stores/authStore';
+import { hydratePreferencesStore } from '@/stores/preferencesStore';
 import { useConsumerSession } from '@/hooks/useConsumerSession';
+import { usePreferenceSync } from '@/hooks/usePreferences';
 import { useColors } from '@/hooks/useColors';
 import { authErrorMessage } from '@/utils/authErrors';
-import { Provider as ReduxProvider } from 'react-redux';
-import { identityStore } from '@/stores/authStore';
 
 SplashScreen.preventAutoHideAsync();
 setBaseUrl(`https://${process.env.EXPO_PUBLIC_DOMAIN}`);
@@ -33,7 +34,9 @@ const queryClient = new QueryClient();
 
 function RootLayoutNav() {
   const { isAuthenticated } = useConsumerSession();
+  usePreferenceSync();
   return (
+    <BiometricLock isAuthenticated={isAuthenticated}>
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Protected guard={!isAuthenticated}>
         <Stack.Screen name="login" options={{ headerShown: false }} />
@@ -62,6 +65,7 @@ function RootLayoutNav() {
       <Stack.Screen name="add-payment-method" options={{ headerShown: false, animation: 'slide_from_right' }} />
       </Stack.Protected>
     </Stack>
+    </BiometricLock>
   );
 }
 
@@ -74,7 +78,7 @@ function SessionBootstrap() {
   useEffect(() => {
     let mounted = true;
     setError(null);
-    ensureAuthHydrated().then(
+    Promise.all([ensureAuthHydrated(), hydrateAppStore(), hydratePreferencesStore()]).then(
       () => { if (mounted) setReady(true); },
       (failure) => { if (mounted) setError(failure); },
     );
@@ -113,21 +117,17 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <ReduxProvider store={identityStore}>
       <QueryClientProvider client={queryClient}>
       <LocalizationProvider>
         <ErrorBoundary>
-          <AppProvider>
-              <GestureHandlerRootView style={{ flex: 1 }}>
-                <KeyboardProvider>
-                  <SessionBootstrap />
-                </KeyboardProvider>
-              </GestureHandlerRootView>
-          </AppProvider>
+          <GestureHandlerRootView style={{ flex: 1 }}>
+            <KeyboardProvider>
+              <SessionBootstrap />
+            </KeyboardProvider>
+          </GestureHandlerRootView>
         </ErrorBoundary>
       </LocalizationProvider>
       </QueryClientProvider>
-      </ReduxProvider>
     </SafeAreaProvider>
   );
 }

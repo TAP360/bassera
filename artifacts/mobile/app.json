@@ -41,6 +41,12 @@
       "expo-localization",
       "expo-secure-store",
       [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow Bassera to use Face ID to unlock the app."
+        }
+      ],
+      [
         "expo-image-picker",
         {
           "cameraPermission": "Allow Bassera to use your camera to scan receipts.",

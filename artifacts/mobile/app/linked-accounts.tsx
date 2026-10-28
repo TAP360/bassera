@@ -12,8 +12,7 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { useApp } from '@/context/AppContext';
-import type { LinkedAccount, LinkedAccountKind } from '@/context/AppContext';
+import { useAppStore, type LinkedAccount, type LinkedAccountKind } from '@/stores/appStore';
 import { useColors } from '@/hooks/useColors';
 import { useLocalization } from '@/localization';
 
@@ -29,7 +28,9 @@ export default function LinkedAccountsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { linkedAccounts, paymentMethods, removeLinkedAccount } = useApp();
+  const linkedAccounts = useAppStore((state) => state.linkedAccounts);
+  const paymentMethods = useAppStore((state) => state.paymentMethods);
+  const removeLinkedAccount = useAppStore((state) => state.removeLinkedAccount);
   const { t, isRTL } = useLocalization();
   const textAlign = isRTL ? 'right' : 'left';
   const topPad = Platform.OS === 'web' ? insets.top + 67 : insets.top;

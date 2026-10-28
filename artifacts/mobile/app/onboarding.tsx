@@ -21,7 +21,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
-import { useApp } from '@/context/AppContext';
+import { useAppStore } from '@/stores/appStore';
 import { useLocalization } from '@/localization';
 import { IdentityAuthForm } from '@/components/IdentityAuthForm';
 import { useMobileLogin } from '@/hooks/useMobileLogin';
@@ -103,7 +103,7 @@ const BAND_COLORS: Record<ScoreBand, string> = {
 export default function OnboardingScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { completeOnboarding } = useApp();
+  const completeOnboarding = useAppStore((state) => state.completeOnboarding);
   const { t, language } = useLocalization();
   const auth = useMobileLogin();
   const { data: consumer, isAuthenticated } = useConsumerSession();
@@ -342,12 +342,7 @@ export default function OnboardingScreen() {
     setFinishing(true);
     try {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      await completeOnboarding(
-        null,
-        userName.trim() || undefined,
-        consumer?.email || (auth.isEmail ? auth.identifier.trim() : undefined),
-        result,
-      );
+      completeOnboarding(null, result);
       await markSurveyComplete();
       router.replace('/');
     } finally {

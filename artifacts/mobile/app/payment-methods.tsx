@@ -5,7 +5,7 @@ import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from '
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 
-import { useApp } from '@/context/AppContext';
+import { useAppStore } from '@/stores/appStore';
 import { useColors } from '@/hooks/useColors';
 import { useLocalization } from '@/localization';
 
@@ -13,7 +13,9 @@ export default function PaymentMethodsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { paymentMethods, linkedAccounts, removePaymentMethod } = useApp();
+  const paymentMethods = useAppStore((state) => state.paymentMethods);
+  const linkedAccounts = useAppStore((state) => state.linkedAccounts);
+  const removePaymentMethod = useAppStore((state) => state.removePaymentMethod);
   const { t, isRTL } = useLocalization();
   const textAlign = isRTL ? 'right' : 'left';
   const topPad = Platform.OS === 'web' ? insets.top + 67 : insets.top;

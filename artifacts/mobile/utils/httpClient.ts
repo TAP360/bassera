@@ -188,6 +188,32 @@ async function refreshSession(): Promise<void> {
   return rotation;
 }
 
+/**
+ * Revokes this device's session on the server (POST /v1/identity/auth/logout). Uses the
+ * interceptor-free client so a 401 never triggers a refresh that would mint a token after logout.
+ */
+export async function revokeSession(): Promise<void> {
+  if (rotation) await rotation.catch(() => undefined);
+  // An expired access token is rejected, so rotate first; the body must carry the current refresh token.
+  if (useAuthStore.getState().tokens && useAuthStore.getState().expiresAt <= Date.now() + 30_000) {
+    await refreshSession().catch(() => undefined);
+  }
+  const tokens = useAuthStore.getState().tokens;
+  if (!tokens) return;
+  await refreshClient.post(
+    '/v1/identity/auth/logout',
+    { refreshToken: tokens.refreshToken },
+    {
+      timeout: 10_000,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept-Language': await getRequestLanguage(),
+        Authorization: `Bearer ${tokens.accessToken}`,
+      },
+    },
+  );
+}
+
 httpClient.interceptors.request.use(
   async (config) => {
     if (

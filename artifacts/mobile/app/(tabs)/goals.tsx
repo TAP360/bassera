@@ -17,7 +17,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 
-import { useApp } from '@/context/AppContext';
+import { useAppStore } from '@/stores/appStore';
 import { useColors } from '@/hooks/useColors';
 import { useGoals } from '@/hooks/useGoals';
 import { useLocalization } from '@/localization';
@@ -125,7 +125,9 @@ function ProgressBar({
 export default function GoalsScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { goals: localGoals, streak, addGoal } = useApp();
+  const localGoals = useAppStore((state) => state.goals);
+  const streak = useAppStore((state) => state.streak);
+  const addGoal = useAppStore((state) => state.addGoal);
   const goalsQuery = useGoals();
   const isAuthenticated = goalsQuery.hasSession;
   const goals = isAuthenticated ? (goalsQuery.data ?? []) : localGoals;

@@ -14,7 +14,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 
-import { useApp } from "@/context/AppContext";
+import { useProfile } from "@/hooks/useProfile";
 import { useColors } from "@/hooks/useColors";
 import { useLocalization } from "@/localization";
 
@@ -82,7 +82,7 @@ export default function UpgradeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { profile } = useApp();
+  const { profile } = useProfile();
   const { t, isRTL } = useLocalization();
   const [annual, setAnnual] = useState(false);
   const [selected, setSelected] = useState<string>("premium");

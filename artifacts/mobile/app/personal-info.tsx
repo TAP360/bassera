@@ -17,37 +17,34 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 
-import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
 import { useLocalization } from '@/localization';
 import { showProfilePhotoOptions } from '@/utils/profilePhoto';
 import { useConsumerProfileUpdate } from '@/hooks/useConsumerProfileUpdate';
-import { useConsumerSession } from '@/hooks/useConsumerSession';
+import { useProfile } from '@/hooks/useProfile';
 import { authErrorMessage } from '@/utils/authErrors';
 import { getCountryOptions } from '@/utils/countries';
+import { useAppStore } from '@/stores/appStore';
+import { usePreferencesStore } from '@/stores/preferencesStore';
 import { useAuthStore } from '@/stores/authStore';
 
 export default function PersonalInfoScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const colors = useColors();
-  const { profile, updateProfile } = useApp();
+  const { profile } = useProfile();
+  const updateLocalProfile = useAppStore((state) => state.updateLocalProfile);
   const { t, isRTL, language } = useLocalization();
   const textAlign = isRTL ? 'right' : 'left';
-  const { data: consumer } = useConsumerSession();
   const profileUpdate = useConsumerProfileUpdate();
   const [saving, setSaving] = useState(false);
 
   const [name, setName] = useState(profile.name);
-  const email = consumer?.email ?? '';
+  const email = profile.email;
   const phone = useAuthStore((identity) => identity.phone) ?? '';
-  const countryCode = consumer?.demographics?.countryCode;
+  const countryCode = profile.demographics?.countryCode;
   const country = getCountryOptions(language).find((option) => option.country === countryCode)?.name ?? '';
-  let currency = '';
-  try {
-    const preferences = JSON.parse(consumer?.preferences || '{}');
-    if (typeof preferences.currency === 'string') currency = preferences.currency;
-  } catch { /* An unavailable API preference is shown empty, never fabricated. */ }
+  const currency = usePreferencesStore((state) => state.currency);
   const [changed, setChanged] = useState(false);
 
   const topPad = Platform.OS === 'web' ? insets.top + 67 : insets.top;
@@ -86,7 +83,7 @@ export default function PersonalInfoScreen() {
   };
 
   const choosePhoto = () =>
-    showProfilePhotoOptions(t, (photoUri) => updateProfile({ photoUri }));
+    showProfilePhotoOptions(t, (photoUri) => updateLocalProfile({ photoUri }));
 
   return (
     <KeyboardAvoidingView

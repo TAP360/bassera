@@ -57,12 +57,12 @@ Phone flow:
    `resendAfter`, and never pre-fills or generates an OTP.
 3. POST `/v1/identity/consumer/auth/otp/verify` with `{ businessCode, phone, otp }`.
 4. A non-MFA response with a complete session saves both access and refresh
-    tokens to Redux in `stores/authStore.ts`, using Redux Persist with
+    tokens to the Zustand auth store in `stores/authStore.ts`, using Zustand `persist` with
     AES-256-GCM-encrypted AsyncStorage. Persistence is awaited before profile loading is enabled.
 5. GET `/v1/identity/consumer/me` with the saved Bearer access token.
    The profile is cached in React Query under
     `["identity", "consumer", "me", userId]`. The full response is also saved
-    in the encrypted Redux snapshot, validated against the authenticated userId.
+    in the encrypted auth snapshot, validated against the authenticated userId.
 6. Protected routes open only after the profile loads successfully. Restoring
    a persisted session fetches `/me` again; a failure offers retry/sign-out.
 7. When verification returns `newUser: true` (first sign-in by phone or email),
@@ -85,17 +85,45 @@ Email flow:
 
 PUT `/v1/identity/consumer/me` accepts a partial `{ name, language, halalMode }`
 update and returns the updated full profile. Personal Information and the
-onboarding name step save names to this endpoint and update both Redux and
+onboarding name step save names to this endpoint and update both the auth store and
 React Query. Email and phone cannot be edited through PUT and are read-only.
-The AppContext presentation overlays the fetched Redux name/email, so the
-dashboard and existing screens do not show a fabricated/default identity.
+The Profile toggles halal mode via the same endpoint, optimistically.
+
+`useProfile()` (`hooks/useProfile.ts`) is the screen-facing GET
+`/v1/identity/consumer/me` hook. It shares the session's React Query cache
+entry (no duplicate request), shows the persisted auth-store profile as placeholder
+data, parses the JSON-encoded `preferences` string, formats `createdAt` as
+"member since", and merges device-only profile data (photo, money personality,
+plan, scores) from the persisted Zustand app store (`stores/appStore.ts`). The
+name falls back to a localized placeholder, never a fabricated identity.
+
+### Preferences
+
+`preferences` is a JSON-encoded string on the profile. The app manages
+`{ currency, theme, biometric, notifications }` (`stores/preferencesStore.ts`,
+encrypted Zustand persist) and preserves any other keys. `usePreferenceSync()`
+applies server values whenever GET `/me` returns new ones (e.g. sign-in on
+another device), and adopts the profile `language` (switching language reloads
+the app for RTL/LTR). `useSavePreferences()` (`hooks/usePreferences.ts`)
+applies changes locally first, then sends PUT `/me` with
+`{ language?, preferences: JSON.stringify(mergedObject) }`, rolling back on
+failure. A language change is saved before switching, since the switch reloads.
+
+- Currency: EGP, SAR, AED, KWD, QAR, BHD, OMR, USD, EUR.
+- Appearance: `system` / `light` / `dark`, applied app-wide through
+  `Appearance.setColorScheme` and `useColors()`; kept on sign-out.
+- Biometric: enabling or disabling requires a successful Face ID / Touch ID /
+  fingerprint check (`expo-local-authentication`, device passcode fallback).
+  When on, `BiometricLock` covers the app on launch and after 30s in the
+  background, with a sign-out escape. Devices without biometrics or a passcode
+  are not locked. Sign-out resets currency, biometric and notifications.
 
 ## Client and session helpers
 
 Every request sets `Content-Type: application/json` and `Accept-Language`
 (`ar` or `en`) from the saved language/device preference. The public auth
 endpoints never receive an old Bearer token. Other requests read the hydrated,
-current Redux session before setting Authorization. Existing generated AI
+current auth-store session before setting Authorization. Existing generated AI
 API calls keep their separate working base URL.
 
 The endpoint contracts live in `lib/api-spec/identity.openapi.yaml`; the
@@ -106,10 +134,17 @@ the generated AI service. Regenerate with
 Use `await setAuthTokens(completeTokens)` from `@/storage/authToken` or
 `await useAuthStore.getState().saveSession(completeTokens)` only after real OTP
 verification. `await getAuthToken()` waits for hydration.
-Use `logoutSession(queryClient)` to cancel and remove identity profile queries
-and clear both tokens. The Profile screen preserves its existing behavior
-of also clearing local financial data; its confirmation explicitly warns of
-this. `clearAuthToken()` only clears the token session.
+Use `logoutSession(queryClient)` to sign out. It first calls POST
+`/v1/identity/auth/logout` with `{ refreshToken }` (this device only; 204),
+which blacklists the access token and revokes the refresh token. The call uses
+the interceptor-free client, so a 401 never triggers a refresh that would mint
+new tokens after logout; an expiring session is rotated first so the current
+refresh token is revoked. Revocation is best effort (10s timeout): offline or
+server errors still complete the local sign-out. It then cancels and clears
+every cached query and clears both tokens. `useSignOut()` (Profile and the
+biometric lock screen) additionally clears local financial data and
+account preferences; the confirmation explicitly warns of this.
+`clearAuthToken()` only clears the token session.
 
 Response errors are rejected unchanged by the Axios interceptor. UI errors
 are localized and do not print server messages, tokens, or request configs.
@@ -137,7 +172,7 @@ discard credentials. No automatic retry is sent to the rotating refresh API.
 
 ## Encryption and development transport
 
-The Redux snapshot contains tokens, expiry metadata, full API profile, and
+The auth snapshot contains tokens, expiry metadata, full API profile, and
 the server-validated phone number. It is encrypted as one authenticated
 AES-256-GCM payload; volatile flags, passwords and OTPs are not persisted.
 Each write has a fresh 96-bit nonce, and the storage key is bound as additional
@@ -149,10 +184,13 @@ app or same-origin malicious script.
 
 Local financial state/account labels are also encrypted to avoid plaintext
 copies of API names/emails. Legacy local state is encrypted before replacing
-it; legacy Zustand tokens migrate to the encrypted Redux record before their
-old key is removed. Failed reads/decryption do not overwrite data with defaults.
-The useAuthStore name is only a compatibility facade; its implementation uses
-Redux selectors/actions, not Zustand.
+it. All persisted state uses Zustand `persist` with encrypted storage: the auth
+session (`stores/authStore.ts`) and local app data (`stores/appStore.ts`). The
+auth store keeps the former `persist:bassera_identity` key and reads the old
+redux-persist format, rewriting it in the Zustand format; legacy plaintext
+Zustand tokens also migrate before their old key is removed. Auth writes are
+queued so an older snapshot can never land after a newer one (e.g. resurrect a
+logged-out session). Failed reads/decryption do not overwrite data with defaults.
 
 Expo Go and web development requests both use `/api/identity-dev` on the
 existing API server when connecting to the owner's HTTP backend. This avoids

@@ -27,6 +27,27 @@ paths:
                 $ref: "#/components/schemas/ConsumerTokens"
         "400":
           description: INVALID_REFRESH_TOKEN or ACCOUNT_NOT_ACTIVE.
+  /v1/identity/auth/logout:
+    post:
+      operationId: logoutSession
+      description: >-
+        Shared by all user types. Blacklists the access token for its remaining lifetime and
+        revokes refresh tokens. With refreshToken only that device is signed out; without it,
+        every device.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        "204":
+          description: Signed out.
   /v1/identity/consumer/auth/register:
     post:
       operationId: registerConsumer
@@ -245,6 +266,13 @@ components:
         halalMode:
           type: boolean
           nullable: true
+        preferences:
+          type: string
+          nullable: true
+          description: >-
+            JSON-encoded preferences object (stored as JSONB), e.g.
+            {"currency":"EGP","notifications":true,"biometric":false,"theme":"system"}.
+            Replaces the stored value, so clients send the full merged object.
     ConsumerRegistrationInput:
       type: object
       required: [email, password, businessCode]
