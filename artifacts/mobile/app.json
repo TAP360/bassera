@@ -39,7 +39,15 @@
       ],
       "expo-web-browser",
       "expo-localization",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Allow Bassera to use your camera to scan receipts.",
+          "photosPermission": "Allow Bassera to access your photos to scan receipts.",
+          "microphonePermission": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

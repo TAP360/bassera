@@ -43,6 +43,7 @@ interface Transaction {
   date: string;
   type: 'expense' | 'income';
   emotionTag?: string;
+  note?: string;
 }
 
 interface Goal {

@@ -2,6 +2,7 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useState } from 'react';
 import {
+  ActivityIndicator,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -18,6 +19,7 @@ import { Feather } from '@expo/vector-icons';
 
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
+import { useGoals } from '@/hooks/useGoals';
 import { useLocalization } from '@/localization';
 
 const ACHIEVEMENTS = [
@@ -72,15 +74,15 @@ const ACHIEVEMENTS = [
 ];
 
 const GOAL_PRESETS = [
-  { icon: 'shield', label: 'Emergency', color: '#22C55E', emoji: '🛡️' },
-  { icon: 'home', label: 'Home', color: '#2E3192', emoji: '🏠' },
-  { icon: 'briefcase', label: 'Investment', color: '#92278F', emoji: '💼' },
-  { icon: 'book', label: 'Education', color: '#F37021', emoji: '📚' },
-  { icon: 'globe', label: 'Travel', color: '#0EA5E9', emoji: '✈️' },
-  { icon: 'heart', label: 'Health', color: '#EF4444', emoji: '❤️' },
-  { icon: 'car', label: 'Car', color: '#F59E0B', emoji: '🚗' },
-  { icon: 'target', label: 'Savings', color: '#64748B', emoji: '🎯' },
-];
+  { id: 'emergency', icon: 'shield', label: 'Emergency', color: '#22C55E', emoji: '🛡️' },
+  { id: 'home', icon: 'home', label: 'Home', color: '#2E3192', emoji: '🏠' },
+  { id: 'investment', icon: 'briefcase', label: 'Investment', color: '#92278F', emoji: '💼' },
+  { id: 'education', icon: 'book', label: 'Education', color: '#F37021', emoji: '📚' },
+  { id: 'travel', icon: 'globe', label: 'Travel', color: '#0EA5E9', emoji: '✈️' },
+  { id: 'health', icon: 'heart', label: 'Health', color: '#EF4444', emoji: '❤️' },
+  { id: 'car', icon: 'car', label: 'Car', color: '#F59E0B', emoji: '🚗' },
+  { id: 'savings', icon: 'target', label: 'Savings', color: '#64748B', emoji: '🎯' },
+] as const;
 
 const GOAL_ICONS: Record<string, string> = {
   shield: '🛡️',
@@ -100,7 +102,7 @@ function ProgressBar({
   total: number;
   color: string;
 }) {
-  const pct = Math.min((value / total) * 100, 100);
+  const pct = total > 0 ? Math.min((value / total) * 100, 100) : 0;
   return (
     <View
       style={{
@@ -123,7 +125,10 @@ function ProgressBar({
 export default function GoalsScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { goals, streak, profile, addGoal } = useApp();
+  const { goals: localGoals, streak, addGoal } = useApp();
+  const goalsQuery = useGoals();
+  const isAuthenticated = goalsQuery.hasSession;
+  const goals = isAuthenticated ? (goalsQuery.data ?? []) : localGoals;
   const { t, isRTL } = useLocalization();
   const textAlign = isRTL ? 'right' : 'left';
   const [showAdd, setShowAdd] = useState(false);
@@ -133,10 +138,60 @@ export default function GoalsScreen() {
 
   const topPad = Platform.OS === 'web' ? insets.top + 67 : insets.top;
   const botPad = insets.bottom + 40;
+  const parsedTarget = Number(newGoalTarget.replace(/,/g, ''));
+  const canAddGoal =
+    newGoalTitle.trim().length > 0 &&
+    Number.isFinite(parsedTarget) &&
+    parsedTarget > 0;
+  const isSavingGoal = goalsQuery.createGoal.isPending;
 
   const totalSaved = goals.reduce((sum, g) => sum + g.current, 0);
   const totalTarget = goals.reduce((sum, g) => sum + g.target, 0);
-  const overallPct = Math.round((totalSaved / totalTarget) * 100);
+  const overallPct =
+    totalTarget > 0 ? Math.min(Math.round((totalSaved / totalTarget) * 100), 100) : 0;
+
+  const closeAddModal = (afterSave = false) => {
+    if (isSavingGoal && !afterSave) return;
+    Keyboard.dismiss();
+    setShowAdd(false);
+    setNewGoalTitle('');
+    setNewGoalTarget('');
+    setSelectedPreset(0);
+    if (!afterSave) goalsQuery.createGoal.reset();
+  };
+
+  const saveGoal = () => {
+    if (!canAddGoal) return;
+    Keyboard.dismiss();
+    const preset = GOAL_PRESETS[selectedPreset];
+    if (isAuthenticated) {
+      goalsQuery.createGoal.mutate(
+        {
+          name: newGoalTitle.trim(),
+          targetAmount: parsedTarget,
+          presetId: preset.id,
+        },
+        {
+          onSuccess: () => {
+            closeAddModal(true);
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          },
+        },
+      );
+      return;
+    }
+
+    addGoal({
+      title: newGoalTitle.trim(),
+      target: parsedTarget,
+      current: 0,
+      icon: preset.icon,
+      deadline: 'Dec 2026',
+      color: preset.color,
+    });
+    closeAddModal();
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background, direction: isRTL ? 'rtl' : 'ltr' }}>
@@ -204,9 +259,42 @@ export default function GoalsScreen() {
             {t('goals.active')}
           </Text>
 
-          {goals.map((g) => {
-            const pct = Math.round((g.current / g.target) * 100);
-            const remaining = g.target - g.current;
+          {isAuthenticated && goalsQuery.isPending ? (
+            <ActivityIndicator
+              accessibilityLabel={t('common.loading')}
+              color={colors.primary}
+              style={styles.listStatus}
+            />
+          ) : isAuthenticated && goalsQuery.isError ? (
+            <View style={[styles.listStatusCard, { backgroundColor: colors.card }]}>
+              <Text style={[styles.listStatusText, { color: colors.mutedForeground }]}>
+                {t(
+                  goalsQuery.isFinancialProfileMissing
+                    ? 'goals.profileRequired'
+                    : 'goals.loadError',
+                )}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void goalsQuery.refetch()}
+                style={styles.retryButton}
+              >
+                <Text style={[styles.retryText, { color: colors.primary }]}>
+                  {t('common.retry')}
+                </Text>
+              </Pressable>
+            </View>
+          ) : goals.length === 0 ? (
+            <Text style={[styles.listStatusText, { color: colors.mutedForeground }]}>
+              {t('goals.empty')}
+            </Text>
+          ) : goals.map((g) => {
+            const pct = g.target > 0 ? Math.min(Math.round((g.current / g.target) * 100), 100) : 0;
+            const remaining = Math.max(g.target - g.current, 0);
+            const goalEmoji =
+              'emoji' in g && typeof g.emoji === 'string'
+                ? g.emoji
+                : GOAL_ICONS[g.icon] ?? '🎯';
             return (
               <View
                 key={g.id}
@@ -220,7 +308,7 @@ export default function GoalsScreen() {
                     ]}
                   >
                     <Text style={styles.goalEmoji}>
-                      {GOAL_ICONS[g.icon] ?? '🎯'}
+                      {goalEmoji}
                     </Text>
                   </View>
                   <View style={{ flex: 1 }}>
@@ -362,6 +450,7 @@ export default function GoalsScreen() {
         style={[styles.fab, { bottom: botPad + 20 }]}
         onPress={() => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          goalsQuery.createGoal.reset();
           setShowAdd(true);
         }}
       >
@@ -374,10 +463,7 @@ export default function GoalsScreen() {
         visible={showAdd}
         transparent
         animationType="slide"
-        onRequestClose={() => {
-          Keyboard.dismiss();
-          setShowAdd(false);
-        }}
+        onRequestClose={() => closeAddModal()}
       >
         <View style={{ flex: 1, direction: isRTL ? 'rtl' : 'ltr' }}>
           <Pressable
@@ -385,10 +471,7 @@ export default function GoalsScreen() {
               StyleSheet.absoluteFill,
               { backgroundColor: 'rgba(0,0,0,0.55)' },
             ]}
-            onPress={() => {
-              Keyboard.dismiss();
-              setShowAdd(false);
-            }}
+            onPress={() => closeAddModal()}
           />
           <KeyboardAvoidingView
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -486,8 +569,7 @@ export default function GoalsScreen() {
                 <Pressable
                   style={[styles.modalCancel, { borderColor: colors.border }]}
                   onPress={() => {
-                    Keyboard.dismiss();
-                    setShowAdd(false);
+                    closeAddModal();
                   }}
                 >
                   <Text
@@ -502,37 +584,30 @@ export default function GoalsScreen() {
                 <Pressable
                   style={[
                     styles.modalConfirm,
-                    { opacity: newGoalTitle && newGoalTarget ? 1 : 0.4 },
+                    { opacity: canAddGoal && !isSavingGoal ? 1 : 0.4 },
                   ]}
-                  disabled={!newGoalTitle || !newGoalTarget}
-                  onPress={() => {
-                    Keyboard.dismiss();
-                    const preset = GOAL_PRESETS[selectedPreset];
-                    addGoal({
-                      title: newGoalTitle.trim(),
-                      target: Number(newGoalTarget.replace(/,/g, '')),
-                      current: 0,
-                      icon: preset.icon,
-                      deadline: 'Dec 2026',
-                      color: preset.color,
-                    });
-                    setShowAdd(false);
-                    setNewGoalTitle('');
-                    setNewGoalTarget('');
-                    setSelectedPreset(0);
-                    Haptics.notificationAsync(
-                      Haptics.NotificationFeedbackType.Success,
-                    );
-                  }}
+                  disabled={!canAddGoal || isSavingGoal}
+                  onPress={saveGoal}
                 >
                   <LinearGradient
                     colors={['#2E3192', '#92278F']}
                     style={styles.modalConfirmGrad}
                   >
-                    <Text style={styles.modalConfirmText}>{t('goals.addGoal')}</Text>
+                    <Text style={styles.modalConfirmText}>
+                      {isSavingGoal ? t('common.saving') : t('goals.addGoal')}
+                    </Text>
                   </LinearGradient>
                 </Pressable>
               </View>
+              {goalsQuery.createGoal.isError && (
+                <Text accessibilityRole="alert" style={styles.saveError}>
+                  {t(
+                    goalsQuery.isCreateProfileMissing
+                      ? 'goals.profileRequired'
+                      : 'goals.saveError',
+                  )}
+                </Text>
+              )}
             </View>
           </KeyboardAvoidingView>
         </View>
@@ -581,6 +656,27 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 8,
     elevation: 2,
+  },
+  listStatus: { marginVertical: 20 },
+  listStatusCard: {
+    borderRadius: 16,
+    padding: 16,
+    alignItems: 'center',
+    gap: 8,
+  },
+  listStatusText: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    textAlign: 'center',
+    marginVertical: 12,
+  },
+  retryButton: { padding: 8 },
+  retryText: { fontSize: 14, fontFamily: 'Inter_600SemiBold' },
+  saveError: {
+    color: '#EF4444',
+    fontSize: 13,
+    fontFamily: 'Inter_500Medium',
+    textAlign: 'center',
   },
   summaryRow: {
     flexDirection: 'row',

@@ -1,15 +1,18 @@
 import * as Haptics from "expo-haptics";
+import * as ImagePicker from "expo-image-picker";
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useEffect, useRef, useState } from "react";
 import {
+  Alert,
   Animated,
+  Image,
+  Linking,
   Modal,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -20,31 +23,46 @@ import { useColors } from "@/hooks/useColors";
 import { useLocalization } from "@/localization";
 import { EXPENSE_CATEGORIES, EMOTION_TAGS } from "@/constants/categories";
 import { TransactionSaveFeedback } from "@/components/TransactionSaveFeedback";
+import { useExtractReceipt } from "@/hooks/useExtractReceipt";
 
 interface ReceiptItem {
   name: string;
   amount: number;
+  currency: string;
   category: string;
   categoryId: string;
   emoji: string;
 }
 
-const MOCK_RECEIPTS: ReceiptItem[][] = [
-  [
-    { name: "Espresso × 2", amount: 90, category: "Food & Drink", categoryId: "food", emoji: "☕" },
-    { name: "Croissant", amount: 45, category: "Food & Drink", categoryId: "food", emoji: "🥐" },
-    { name: "Sandwich", amount: 110, category: "Food & Drink", categoryId: "food", emoji: "🥪" },
-  ],
-  [
-    { name: "Taxi Ride", amount: 85, category: "Transport", categoryId: "transport", emoji: "🚕" },
-    { name: "Toll Fee", amount: 20, category: "Transport", categoryId: "transport", emoji: "🛣️" },
-  ],
-  [
-    { name: "T-Shirt", amount: 350, category: "Shopping", categoryId: "shopping", emoji: "👕" },
-    { name: "Shoes", amount: 890, category: "Shopping", categoryId: "shopping", emoji: "👟" },
-    { name: "Jeans", amount: 650, category: "Shopping", categoryId: "shopping", emoji: "👖" },
-  ],
-];
+const RECEIPT_CATEGORY_ALIASES: Record<string, string> = {
+  grocery: "food",
+  groceries: "food",
+  food: "food",
+  transportation: "transport",
+  transport: "transport",
+  healthcare: "health",
+  medical: "health",
+  entertainment: "entertainment",
+  utilities: "bills",
+};
+
+function getReceiptCategory(value: string) {
+  const normalized = value.trim().toLowerCase().replace(/[\s&-]+/g, "_");
+  const categoryId =
+    RECEIPT_CATEGORY_ALIASES[normalized] ??
+    normalized;
+  const matchedCategory = EXPENSE_CATEGORIES.find(
+    (category) =>
+      category.id === categoryId ||
+      category.label.toLowerCase().replace(/[\s&-]+/g, "_") === normalized,
+  );
+  const fallbackCategory = EXPENSE_CATEGORIES.find(
+    (category) => category.id === "other",
+  );
+  if (matchedCategory) return matchedCategory;
+  if (fallbackCategory) return fallbackCategory;
+  throw new Error("RECEIPT_CATEGORY_FALLBACK_MISSING");
+}
 
 interface Props {
   visible: boolean;
@@ -58,19 +76,21 @@ export function AddReceiptModal({ visible, onClose }: Props) {
   const insets = useSafeAreaInsets();
   const { addTransaction } = useApp();
   const { t, isRTL } = useLocalization();
+  const receiptMutation = useExtractReceipt();
 
   const [step, setStep] = useState<ReceiptStep>("scan");
   const [items, setItems] = useState<ReceiptItem[]>([]);
   const [editingItem, setEditingItem] = useState<number | null>(null);
   const [emotionTag, setEmotionTag] = useState("");
-  const [merchant, setMerchant] = useState("");
+  const [receiptImageUri, setReceiptImageUri] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState("");
+  const [pickerError, setPickerError] = useState(false);
   const saveLock = useRef(false);
 
   const scanAnim = useRef(new Animated.Value(0)).current;
   const dotAnim = useRef(new Animated.Value(0)).current;
 
   const botPad = Platform.OS === "web" ? insets.bottom + 34 : insets.bottom;
-  const topPad = Platform.OS === "web" ? insets.top + 67 : insets.top;
 
   useEffect(() => {
     if (step === "scan") {
@@ -88,17 +108,87 @@ export function AddReceiptModal({ visible, onClose }: Props) {
     }
   }, [step]);
 
-  const startScan = () => {
+  const scanReceipt = async (source: "camera" | "gallery") => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    setStep("processing");
-    const mockItems = MOCK_RECEIPTS[Math.floor(Math.random() * MOCK_RECEIPTS.length)];
-    const merchants = ["Costa Coffee", "Carrefour", "H&M", "Uber"];
-    setMerchant(merchants[Math.floor(Math.random() * merchants.length)]);
-    setTimeout(() => {
-      setItems(mockItems);
+    receiptMutation.reset();
+    setPickerError(false);
+    let uploadStarted = false;
+    try {
+      if (Platform.OS !== "web") {
+        const permission =
+          source === "camera"
+            ? await ImagePicker.requestCameraPermissionsAsync()
+            : await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert(
+            t("receipt.permissionTitle"),
+            t(source === "camera" ? "receipt.cameraPermission" : "receipt.galleryPermission"),
+            [
+              ...(permission.canAskAgain
+                ? []
+                : [
+                    {
+                      text: t("receipt.openSettings"),
+                      onPress: () => {
+                        void Linking.openSettings().catch(() => {
+                          Alert.alert(t("receipt.permissionTitle"), t("receipt.pickerError"));
+                        });
+                      },
+                    },
+                  ]),
+              { text: t("common.ok"), style: "cancel" },
+            ],
+          );
+          return;
+        }
+      }
+
+      const options: ImagePicker.ImagePickerOptions = {
+        mediaTypes: ["images"],
+        quality: 0.8,
+        preferredAssetRepresentationMode:
+          ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Automatic,
+      };
+      const result =
+        source === "camera"
+          ? await ImagePicker.launchCameraAsync(options)
+          : await ImagePicker.launchImageLibraryAsync(options);
+      if (result.canceled || !result.assets[0]) return;
+
+      const asset = result.assets[0];
+      setReceiptImageUri(asset.uri);
+      setItems([]);
+      setTranscript("");
+      setStep("processing");
+      uploadStarted = true;
+      const extraction = await receiptMutation.mutateAsync(asset);
+      setTranscript(extraction.transcript || "");
+      setItems(
+        extraction.expenses
+          .filter(
+            (expense) =>
+              Number.isFinite(expense.amount) &&
+              typeof expense.currency === "string" &&
+              typeof expense.category === "string",
+          )
+          .map((expense, index) => {
+            const category = getReceiptCategory(expense.category);
+            return {
+              name: t("receipt.itemNumber", { count: index + 1 }),
+              amount: expense.amount,
+              currency: expense.currency,
+              category: category.label,
+              categoryId: category.id,
+              emoji: category.emoji,
+            };
+          }),
+      );
       setStep("review");
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    }, 2200);
+    } catch {
+      setStep("scan");
+      if (!uploadStarted) setPickerError(true);
+    }
   };
 
   const handleSave = () => {
@@ -124,6 +214,10 @@ export function AddReceiptModal({ visible, onClose }: Props) {
     setItems([]);
     setEmotionTag("");
     setEditingItem(null);
+    setReceiptImageUri(null);
+    setTranscript("");
+    setPickerError(false);
+    receiptMutation.reset();
     onClose();
   };
 
@@ -161,13 +255,13 @@ export function AddReceiptModal({ visible, onClose }: Props) {
           {step === "scan" && (
             <View style={styles.scanContainer}>
               <View style={styles.scanHeader}>
-                <Text style={styles.scanTitle}>{t("Scan Receipt")}</Text>
+                <Text style={styles.scanTitle}>{t("receipt.title")}</Text>
                 <Pressable onPress={handleClose}>
                   <Feather name="x" size={22} color="rgba(255,255,255,0.7)" />
                 </Pressable>
               </View>
 
-              <Text style={styles.scanSubtitle}>{t("Point your camera at a receipt or bill")}</Text>
+              <Text style={styles.scanSubtitle}>{t("receipt.subtitle")}</Text>
 
               <View style={styles.viewfinder}>
                 <View style={styles.corner} />
@@ -182,26 +276,48 @@ export function AddReceiptModal({ visible, onClose }: Props) {
                   ]}
                 />
 
-                <View style={styles.docPlaceholder}>
-                  <Feather name="file-text" size={48} color="rgba(255,255,255,0.15)" />
-                  <Text style={styles.docPlaceholderText}>{t("Receipt preview")}</Text>
-                </View>
+                {receiptImageUri ? (
+                  <Image source={{ uri: receiptImageUri }} style={styles.receiptImage} resizeMode="contain" />
+                ) : (
+                  <View style={styles.docPlaceholder}>
+                    <Feather name="file-text" size={48} color="rgba(255,255,255,0.15)" />
+                    <Text style={styles.docPlaceholderText}>{t("receipt.preview")}</Text>
+                  </View>
+                )}
               </View>
 
-              <Pressable onPress={startScan}>
+              {(pickerError || receiptMutation.isError) && (
+                <Text style={styles.scanError}>
+                  {t(pickerError
+                    ? "receipt.pickerError"
+                    :
+                    receiptMutation.error instanceof Error &&
+                      receiptMutation.error.message === "UNSUPPORTED_RECEIPT_FILE"
+                      ? "receipt.unsupportedFile"
+                      : receiptMutation.error instanceof Error &&
+                          receiptMutation.error.message === "INVALID_SESSION"
+                        ? "receipt.signInRequired"
+                        : "receipt.uploadError",
+                  )}
+                </Text>
+              )}
+
+              <Pressable onPress={() => void scanReceipt("camera")}>
                 <LinearGradient
                   colors={["#2E3192", "#92278F", "#F37021"]}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 0 }}
                   style={styles.shutterBtn}
                 >
-                  <Feather name="camera" size={26} color="#FFFFFF" />
-                  <Text style={styles.shutterText}>{t("Scan Receipt")}</Text>
+                  <View style={{alignItems:"center", justifyContent:"center", flexDirection: "row", gap: 10, alignSelf:'center'}}>
+                     <Feather name="camera" size={26} color="#FFFFFF" />
+                     <Text style={styles.shutterText}>{t("receipt.cameraButton")}</Text>
+                  </View>
                 </LinearGradient>
               </Pressable>
 
-              <Pressable style={styles.manualBtn} onPress={startScan}>
-                <Text style={styles.manualBtnText}>{t("Enter manually instead")}</Text>
+              <Pressable style={styles.manualBtn} onPress={() => void scanReceipt("gallery")}>
+                <Text style={styles.manualBtnText}>{t("receipt.galleryButton")}</Text>
               </Pressable>
             </View>
           )}
@@ -214,15 +330,15 @@ export function AddReceiptModal({ visible, onClose }: Props) {
               >
                 <Feather name="cpu" size={32} color="#FFFFFF" />
               </LinearGradient>
-              <Text style={styles.processingTitle}>{t("Analyzing Receipt")}</Text>
-              <Text style={styles.processingSubtitle}>{t("AI is extracting and categorizing items…")}</Text>
+              <Text style={styles.processingTitle}>{t("receipt.processingTitle")}</Text>
+              <Text style={styles.processingSubtitle}>{t("receipt.processingSubtitle")}</Text>
 
               <View style={styles.processingSteps}>
                 {[
-                  { label: "Reading receipt", done: true },
-                  { label: "Detecting items", done: true },
-                  { label: "Auto-categorizing", done: false },
-                  { label: "Calculating totals", done: false },
+                  { label: "receipt.stepReading", done: true },
+                  { label: "receipt.stepDetecting", done: true },
+                  { label: "receipt.stepCategorizing", done: false },
+                  { label: "receipt.stepTotals", done: false },
                 ].map((s, i) => (
                   <View key={i} style={styles.processingStep}>
                     <View
@@ -259,97 +375,115 @@ export function AddReceiptModal({ visible, onClose }: Props) {
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
               <View style={styles.reviewHeader}>
                 <View>
-                  <Text style={[styles.reviewTitle, { color: colors.foreground }]}>{t("Receipt Scanned!")}</Text>
-                  <Text style={[styles.reviewMerchant, { color: colors.mutedForeground }]}>{merchant}</Text>
+                  <Text style={[styles.reviewTitle, { color: colors.foreground }]}>{t("receipt.reviewTitle")}</Text>
                 </View>
                 <View style={[styles.aiTag, { backgroundColor: "#2E319215" }]}>
                   <Feather name="cpu" size={12} color="#2E3192" />
-                  <Text style={styles.aiTagText}>{t("AI Categorized")}</Text>
+                  <Text style={styles.aiTagText}>{t("receipt.aiCategorized")}</Text>
                 </View>
               </View>
 
-              <View style={[styles.itemsCard, { backgroundColor: colors.secondary }]}>
-                {items.map((item, idx) => {
-                  const cat = EXPENSE_CATEGORIES.find((c) => c.id === item.categoryId);
-                  return (
-                    <View key={idx}>
-                      <Pressable
-                        style={styles.itemRow}
-                        onPress={() => setEditingItem(editingItem === idx ? null : idx)}
-                      >
-                        <Text style={styles.itemEmoji}>{item.emoji}</Text>
-                        <View style={{ flex: 1 }}>
-                          <Text style={[styles.itemName, { color: colors.foreground }]}>{t(item.name)}</Text>
-                          <View style={styles.itemCatRow}>
-                            <View style={[styles.itemCatBadge, { backgroundColor: (cat?.color ?? "#64748B") + "20" }]}>
-                              <Text style={[styles.itemCatText, { color: cat?.color ?? "#64748B" }]}>
-                                {t(item.category)}
-                              </Text>
-                            </View>
-                            <Feather
-                              name={editingItem === idx ? "chevron-up" : "chevron-down"}
-                              size={14}
-                              color={colors.mutedForeground}
-                            />
-                          </View>
-                        </View>
-                        <Text style={[styles.itemAmount, { color: "#F37021" }]}>
-                          {item.amount.toLocaleString()} EGP
-                        </Text>
-                      </Pressable>
+              {transcript ? (
+                <View style={[styles.transcriptCard, { backgroundColor: colors.secondary }]}>
+                  <Text style={[styles.transcriptTitle, { color: colors.mutedForeground }]}>
+                    {t("receipt.transcript")}
+                  </Text>
+                  <Text style={[styles.transcriptText, { color: colors.foreground }]}>{transcript}</Text>
+                </View>
+              ) : null}
 
-                      {editingItem === idx && (
-                        <View style={styles.itemCategoryPicker}>
-                          <Text style={[styles.pickLabel, { color: colors.mutedForeground }]}>{t("Change category:")}</Text>
-                          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-                            {EXPENSE_CATEGORIES.map((c) => (
-                              <Pressable
-                                key={c.id}
-                                style={[
-                                  styles.pickChip,
-                                  {
-                                    backgroundColor:
-                                      item.categoryId === c.id ? c.color + "25" : colors.card,
-                                    borderColor: item.categoryId === c.id ? c.color : colors.border,
-                                    borderWidth: 1,
-                                  },
-                                ]}
-                                onPress={() => {
-                                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                                  setItems((prev) =>
-                                    prev.map((it, i) =>
-                                      i === idx
-                                        ? { ...it, category: c.label, categoryId: c.id, emoji: c.emoji }
-                                        : it
-                                    )
-                                  );
-                                  setEditingItem(null);
-                                }}
-                              >
-                                <Text style={{ fontSize: 16 }}>{c.emoji}</Text>
-                                <Text style={[styles.pickChipText, { color: colors.foreground }]}>{t(c.label)}</Text>
-                              </Pressable>
-                            ))}
-                          </ScrollView>
-                        </View>
-                      )}
-
-                      {idx < items.length - 1 && (
-                        <View style={[styles.itemDivider, { backgroundColor: colors.border }]} />
-                      )}
-                    </View>
-                  );
-                })}
-              </View>
-
-              <View style={[styles.totalRow, { backgroundColor: colors.card }]}>
-                <Text style={[styles.totalLabel, { color: colors.mutedForeground }]}>{t("Total")}</Text>
-                <Text style={[styles.totalAmount, { color: "#F37021" }]}>
-                  {totalAmount.toLocaleString()} EGP
+              {items.length === 0 ? (
+                <Text style={[styles.noExpenses, { color: colors.mutedForeground }]}>
+                  {t("receipt.noExpenses")}
                 </Text>
-              </View>
+              ) : (
+                <View style={[styles.itemsCard, { backgroundColor: colors.secondary }]}>
+                  {items.map((item, idx) => {
+                    const cat = EXPENSE_CATEGORIES.find((c) => c.id === item.categoryId);
+                    return (
+                      <View key={idx}>
+                        <Pressable
+                          style={styles.itemRow}
+                          onPress={() => setEditingItem(editingItem === idx ? null : idx)}
+                        >
+                          <Text style={styles.itemEmoji}>{item.emoji}</Text>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.itemName, { color: colors.foreground }]}>{t(item.name)}</Text>
+                            <View style={styles.itemCatRow}>
+                              <View style={[styles.itemCatBadge, { backgroundColor: (cat?.color ?? "#64748B") + "20" }]}>
+                                <Text style={[styles.itemCatText, { color: cat?.color ?? "#64748B" }]}>
+                                  {t(item.category)}
+                                </Text>
+                              </View>
+                              <Feather
+                                name={editingItem === idx ? "chevron-up" : "chevron-down"}
+                                size={14}
+                                color={colors.mutedForeground}
+                              />
+                            </View>
+                          </View>
+                          <Text style={[styles.itemAmount, { color: "#F37021" }]}>
+                            {item.amount.toLocaleString()} {item.currency}
+                          </Text>
+                        </Pressable>
 
-              <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>{t("How did this feel?")}</Text>
+                        {editingItem === idx && (
+                          <View style={styles.itemCategoryPicker}>
+                            <Text style={[styles.pickLabel, { color: colors.mutedForeground }]}>{t("receipt.changeCategory")}</Text>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                              {EXPENSE_CATEGORIES.map((c) => (
+                                <Pressable
+                                  key={c.id}
+                                  style={[
+                                    styles.pickChip,
+                                    {
+                                      backgroundColor:
+                                        item.categoryId === c.id ? c.color + "25" : colors.card,
+                                      borderColor: item.categoryId === c.id ? c.color : colors.border,
+                                      borderWidth: 1,
+                                    },
+                                  ]}
+                                  onPress={() => {
+                                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                                    setItems((prev) =>
+                                      prev.map((it, i) =>
+                                        i === idx
+                                          ? { ...it, category: c.label, categoryId: c.id, emoji: c.emoji }
+                                          : it
+                                      )
+                                    );
+                                    setEditingItem(null);
+                                  }}
+                                >
+                                  <Text style={{ fontSize: 16 }}>{c.emoji}</Text>
+                                  <Text style={[styles.pickChipText, { color: colors.foreground }]}>{t(c.label)}</Text>
+                                </Pressable>
+                              ))}
+                            </ScrollView>
+                          </View>
+                        )}
+
+                        {idx < items.length - 1 && (
+                          <View style={[styles.itemDivider, { backgroundColor: colors.border }]} />
+                        )}
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+
+              {items.length > 0 && (
+                <View style={[styles.totalRow, { backgroundColor: colors.card }]}>
+                  <Text style={[styles.totalLabel, { color: colors.mutedForeground }]}>{t("receipt.total")}</Text>
+                  <Text style={[styles.totalAmount, { color: "#F37021" }]}>
+                    {totalAmount.toLocaleString()} {items[0].currency}
+                  </Text>
+                </View>
+              )}
+
+              {items.length > 0 && (
+              <>
+              <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>{t("receipt.emotionPrompt")}</Text>
               <View style={styles.emotionGrid}>
                 {EMOTION_TAGS.map((e) => (
                   <Pressable
@@ -374,6 +508,8 @@ export function AddReceiptModal({ visible, onClose }: Props) {
                   </Pressable>
                 ))}
               </View>
+              </>
+              )}
 
               <View style={styles.reviewActions}>
                 <Pressable
@@ -381,12 +517,20 @@ export function AddReceiptModal({ visible, onClose }: Props) {
                   onPress={() => {
                     setStep("scan");
                     setItems([]);
+                    setReceiptImageUri(null);
+                    setTranscript("");
+                    setPickerError(false);
+                    receiptMutation.reset();
                   }}
                 >
                   <Feather name="refresh-cw" size={16} color={colors.mutedForeground} />
                   <Text style={[styles.retryText, { color: colors.mutedForeground }]}>{t("common.retry")}</Text>
                 </Pressable>
-                <Pressable style={styles.confirmBtn} onPress={handleSave}>
+                <Pressable
+                  style={[styles.confirmBtn, items.length === 0 && styles.disabledButton]}
+                  onPress={handleSave}
+                  disabled={items.length === 0}
+                >
                   <LinearGradient
                     colors={["#2E3192", "#92278F", "#F37021"]}
                     start={{ x: 0, y: 0 }}
@@ -394,7 +538,7 @@ export function AddReceiptModal({ visible, onClose }: Props) {
                     style={styles.confirmBtnGrad}
                   >
                     <Feather name="check" size={18} color="#FFFFFF" />
-                    <Text style={styles.confirmBtnText}>{t("Save {count} Items", { count: items.length })}</Text>
+                    <Text style={styles.confirmBtnText}>{t("receipt.saveItems", { count: items.length })}</Text>
                   </LinearGradient>
                 </Pressable>
               </View>
@@ -436,7 +580,9 @@ const styles = StyleSheet.create({
   scanLine: { position: "absolute", top: 0, left: 0, right: 0, height: 2, backgroundColor: "#F37021", shadowColor: "#F37021", shadowOpacity: 1, shadowRadius: 6 },
   docPlaceholder: { alignItems: "center", gap: 8 },
   docPlaceholderText: { fontSize: 12, color: "rgba(255,255,255,0.2)", fontFamily: "Inter_400Regular" },
-  shutterBtn: { flexDirection: "row", alignItems: "center", gap: 10, width: "100%", borderRadius: 18, paddingVertical: 16, paddingHorizontal: 24, justifyContent: "center", marginBottom: 12 },
+  receiptImage: { width: "100%", height: "100%" },
+  scanError: { color: "#FCA5A5", fontSize: 13, fontFamily: "Inter_500Medium", textAlign: "center", marginBottom: 10 },
+  shutterBtn: {  alignItems: "center", width: "100%", borderRadius: 18, paddingVertical: 16, paddingHorizontal: 24, justifyContent: "center", marginBottom: 12 , },
   shutterText: { fontSize: 17, fontFamily: "Inter_600SemiBold", color: "#FFFFFF" },
   manualBtn: { paddingVertical: 8 },
   manualBtnText: { fontSize: 14, color: "rgba(255,255,255,0.4)", fontFamily: "Inter_400Regular" },
@@ -452,7 +598,10 @@ const styles = StyleSheet.create({
 
   reviewHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
   reviewTitle: { fontSize: 20, fontFamily: "Inter_700Bold" },
-  reviewMerchant: { fontSize: 13, fontFamily: "Inter_400Regular", marginTop: 2 },
+  transcriptCard: { borderRadius: 14, padding: 12, marginBottom: 12 },
+  transcriptTitle: { fontSize: 11, fontFamily: "Inter_600SemiBold", marginBottom: 6 },
+  transcriptText: { fontSize: 13, lineHeight: 19, fontFamily: "Inter_400Regular" },
+  noExpenses: { fontSize: 14, fontFamily: "Inter_400Regular", textAlign: "center", paddingVertical: 20 },
   aiTag: { flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5 },
   aiTagText: { fontSize: 11, fontFamily: "Inter_600SemiBold", color: "#2E3192" },
   itemsCard: { borderRadius: 18, padding: 4, marginBottom: 12 },
@@ -480,6 +629,7 @@ const styles = StyleSheet.create({
   retryBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", borderRadius: 14, borderWidth: 1, paddingVertical: 14, gap: 6 },
   retryText: { fontSize: 14, fontFamily: "Inter_400Regular" },
   confirmBtn: { flex: 2, borderRadius: 14, overflow: "hidden" },
+  disabledButton: { opacity: 0.5 },
   confirmBtnGrad: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 14, gap: 6 },
   confirmBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#FFFFFF" },
 });

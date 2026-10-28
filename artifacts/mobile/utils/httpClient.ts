@@ -106,6 +106,8 @@ function reportApiResult(
 }
 
 function sanitizeForLog(value: unknown, key = '', depth = 0): unknown {
+  if (typeof FormData !== 'undefined' && value instanceof FormData)
+    return '[MULTIPART DATA REDACTED]';
   if (value === null || typeof value === 'number' || typeof value === 'boolean')
     return value;
   if (typeof value === 'string') {
@@ -195,7 +197,10 @@ httpClient.interceptors.request.use(
     ) {
       throw new Error('IDENTITY_HTTPS_REQUIRED');
     }
-    config.headers.set('Content-Type', 'application/json');
+    const isMultipart =
+      typeof FormData !== 'undefined' && config.data instanceof FormData;
+    if (isMultipart) config.headers.delete('Content-Type');
+    else config.headers.set('Content-Type', 'application/json');
     config.headers.set('Accept-Language', await getRequestLanguage());
 
     // Read on each request so a login, token update, or logout takes effect immediately.

@@ -89,29 +89,7 @@ export default function HomeScreen() {
   const hour = new Date().getHours();
   const greeting =
     hour < 12 ? t('home.goodMorning') : hour < 17 ? t('home.goodAfternoon') : t('home.goodEvening');
-  const recentTransactions = (recentTransactionsQuery.data ?? [])
-    .slice(0, 4)
-    .map((transaction) => {
-      const transactionDate = new Date(transaction.transactionDate);
-      return {
-        id: transaction.id,
-        title:
-          transaction.merchantName ||
-          transaction.description ||
-          transaction.category ||
-          t('Transaction'),
-        category: transaction.category || t('Other'),
-        amount: transaction.amount,
-        currency: transaction.currency,
-        date: Number.isNaN(transactionDate.getTime())
-          ? transaction.transactionDate
-          : transactionDate.toLocaleDateString(isRTL ? 'ar-EG' : 'en-EG', {
-              day: 'numeric',
-              month: 'short',
-            }),
-        type: transaction.amount >= 0 ? ('income' as const) : ('expense' as const),
-      };
-    });
+  const recentTransactions = recentTransactionsQuery.data ?? [];
 
   const quickActions = [
     {

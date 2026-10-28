@@ -16,6 +16,11 @@ import { Feather } from "@expo/vector-icons";
 
 import { useApp } from "@/context/AppContext";
 import { useColors } from "@/hooks/useColors";
+import {
+  useCreateTransaction,
+  type TransactionFeeling,
+} from "@/hooks/useCreateTransaction";
+import { useConsumerSession } from "@/hooks/useConsumerSession";
 import { useLocalization } from "@/localization";
 import { EXPENSE_CATEGORIES, INCOME_CATEGORIES, EMOTION_TAGS, Category } from "@/constants/categories";
 import { TransactionSaveFeedback } from "@/components/TransactionSaveFeedback";
@@ -37,6 +42,8 @@ export function AddExpenseModal({ visible, onClose, initialType = "expense" }: P
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { addTransaction } = useApp();
+  const { isAuthenticated } = useConsumerSession();
+  const createTransaction = useCreateTransaction();
   const { t, isRTL } = useLocalization();
   const textAlign = isRTL ? "right" : "left";
 
@@ -74,19 +81,58 @@ export function AddExpenseModal({ visible, onClose, initialType = "expense" }: P
   const handleSave = () => {
     if (!canProceed || !selectedCategory || saveLock.current) return;
     saveLock.current = true;
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    const feelingByTag: Record<string, TransactionFeeling> = {
+      planned: "PLANNED",
+      impulse: "IMPULSE",
+      routine: "ROUTINE",
+      stressed: "STRESSED",
+      rewarded: "REWARD",
+      regret: "REGRET",
+    };
+    const feeling = feelingByTag[emotionTag];
+
+    const showFeedback = () => {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setStep("feedback");
+    };
+
+    if (isAuthenticated) {
+      createTransaction.mutate(
+        {
+          amount: type === "expense" ? -numericAmount : numericAmount,
+          currency: "EGP",
+          merchantName: title.trim() || undefined,
+          type: "POS",
+          source: "MANUAL",
+          category: selectedCategory.label,
+          transactionDate: new Date().toISOString(),
+          feeling,
+          note: note.trim() || undefined,
+        },
+        {
+          onSuccess: showFeedback,
+          onError: () => {
+            saveLock.current = false;
+          },
+        },
+      );
+      return;
+    }
+
     addTransaction({
-      title: title || selectedCategory.label,
+      title: title.trim() || selectedCategory.label,
       category: selectedCategory.label,
       amount: type === "expense" ? -numericAmount : numericAmount,
       date: "Just now",
       type,
       emotionTag: emotionTag || undefined,
+      note: note.trim() || undefined,
     });
-    setStep("feedback");
+    showFeedback();
   };
 
   const handleClose = () => {
+    if (createTransaction.isPending) return;
     saveLock.current = false;
     setStep("amount");
     setAmount("0");
@@ -95,6 +141,7 @@ export function AddExpenseModal({ visible, onClose, initialType = "expense" }: P
     setEmotionTag("");
     setNote("");
     setType(initialType);
+    createTransaction.reset();
     onClose();
   };
 
@@ -137,7 +184,7 @@ export function AddExpenseModal({ visible, onClose, initialType = "expense" }: P
                 </Text>
               </Pressable>
             </View>
-            <Pressable onPress={handleClose}>
+            <Pressable onPress={handleClose} disabled={createTransaction.isPending}>
               <View style={[styles.closeBtn, { backgroundColor: colors.secondary }]}>
                 <Feather name="x" size={18} color={colors.mutedForeground} />
               </View>
@@ -323,6 +370,15 @@ export function AddExpenseModal({ visible, onClose, initialType = "expense" }: P
                 ))}
               </View>
 
+              {createTransaction.isError && (
+                <Text
+                  accessibilityRole="alert"
+                  style={[styles.saveError, { color: colors.destructive }]}
+                >
+                  {t("transaction.saveError")}
+                </Text>
+              )}
+
               <Text style={[styles.sectionLabel, { color: colors.mutedForeground, textAlign }]}>{t("Note (optional)")}</Text>
               <TextInput
                 style={[styles.textField, styles.noteField, { color: colors.foreground, backgroundColor: colors.secondary, borderColor: colors.border, textAlign, writingDirection: isRTL ? "rtl" : "ltr" }]}
@@ -344,7 +400,11 @@ export function AddExpenseModal({ visible, onClose, initialType = "expense" }: P
                 >
                   <Text style={[styles.backBtnText, { color: colors.mutedForeground }]}>{t("common.back")}</Text>
                 </Pressable>
-                <Pressable style={styles.saveBtn} onPress={handleSave}>
+                <Pressable
+                  style={[styles.saveBtn, createTransaction.isPending && { opacity: 0.6 }]}
+                  onPress={handleSave}
+                  disabled={createTransaction.isPending}
+                >
                   <LinearGradient
                     colors={type === "expense" ? ["#2E3192", "#92278F", "#F37021"] : ["#22C55E", "#16A34A"]}
                     start={{ x: 0, y: 0 }}
@@ -352,7 +412,9 @@ export function AddExpenseModal({ visible, onClose, initialType = "expense" }: P
                     style={styles.saveBtnGrad}
                   >
                     <Feather name="check" size={18} color="#FFFFFF" />
-                    <Text style={styles.saveBtnText}>{t("common.save")}</Text>
+                    <Text style={styles.saveBtnText}>
+                      {createTransaction.isPending ? t("common.saving") : t("common.save")}
+                    </Text>
                   </LinearGradient>
                 </Pressable>
               </View>
@@ -411,4 +473,5 @@ const styles = StyleSheet.create({
   saveBtn: { flex: 2, borderRadius: 14, overflow: "hidden" },
   saveBtnGrad: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 14, gap: 6 },
   saveBtnText: { fontSize: 15, fontFamily: "Inter_600SemiBold", color: "#FFFFFF" },
+  saveError: { fontSize: 13, fontFamily: "Inter_500Medium", marginBottom: 12, textAlign: "center" },
 });
