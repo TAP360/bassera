@@ -6,3 +6,4 @@
 - [Orval transport default](orval-transport-default.md) — Orval 8 defaults to fetch-shaped requests; explicitly match its transport to custom Axios mutators.
 - [Authentication UI preservation](auth-ui-preservation.md) — keep the original onboarding/sign-in layout; integrate identity behavior without replacing the screens.
 - [Identity data protection](identity-storage-security.md) — user requires encrypted Redux identity persistence; plain HTTP consent is development-only.
+- [Cross-platform publishing](cross-platform-publishing.md) — preserve macOS build dependencies even though development runs on Linux.
